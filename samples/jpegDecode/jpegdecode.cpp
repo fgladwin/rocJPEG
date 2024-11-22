@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
             }
         }
         auto end_time = std::chrono::high_resolution_clock::now();
-        double time_per_image_in_sec = std::chrono::duration<double>(end_time - start_time).count();
+        double time_per_image_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         double image_size_in_mpixels = (static_cast<double>(widths[0]) * static_cast<double>(heights[0]) / 1000000);
         image_count++;
 
@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
         if (is_dir) {
             std::cout << std::endl;
             total_images += image_count;
-            time_per_image_all += time_per_image_in_sec;
+            time_per_image_all += time_per_image_in_milli_sec;
             mpixels_all += image_size_in_mpixels;
         }
         if (hw_decode) {
@@ -264,7 +264,7 @@ int main(int argc, char **argv) {
 
     if (is_dir) {
         time_per_image_all = time_per_image_all / total_images;
-        images_per_sec = 1 / time_per_image_all;
+        images_per_sec = 1000 / time_per_image_all;
         double mpixels_per_sec = mpixels_all * images_per_sec / total_images;
         std::cout << "Total decoded images: " << total_images << std::endl;
         if (num_bad_jpegs || num_jpegs_with_411_subsampling || num_jpegs_with_unknown_subsampling || num_jpegs_with_unsupported_resolution) {
@@ -284,7 +284,7 @@ int main(int argc, char **argv) {
             std::cout << std::endl;
         }
         if (total_images) {
-            std::cout << "Average processing time per image (sec): " << time_per_image_all << std::endl;
+            std::cout << "Average processing time per image (ms): " << time_per_image_all << std::endl;
             std::cout << "Average decoded images per sec (Images/Sec): " << images_per_sec << std::endl;
             std::cout << "Average decoded images size (Mpixels/Sec): " << mpixels_per_sec << std::endl;
         }
