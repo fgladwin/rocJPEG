@@ -184,16 +184,16 @@ int main(int argc, char **argv) {
                     std::cerr<<"Jpeg header decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
                     num_jpegs_with_unknown_subsampling++;
                 }
-                widths[0] = width;
-                heights[0] = height;
             }
+            widths[0] = width;
+            heights[0] = height;
             // allocate memory for output buffer.
             auto current_image_size = (((width * height * 3) / 256) * 256) + 256;
             std::cerr << "Width : " << width << " Height : " << height << " Buffer size : " << current_image_size << "\n";
             if (!output_buffer || current_image_size > output_buffer_size) {
                 std::cerr << "Output buffer allocation\n";
-                output_buffer = static_cast<unsigned char *>(malloc(output_buffer_size));
                 output_buffer_size = current_image_size;
+                output_buffer = static_cast<unsigned char *>(malloc(output_buffer_size));
             }
         }
         std::cout << "Decoding started, please wait! ... " << std::endl;
