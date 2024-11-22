@@ -49,20 +49,26 @@ if(ROCJPEG_LIBRARY AND ROCJPEG_INCLUDE_DIR)
     message("-- ${White}Using rocJPEG -- \n\tLibraries:${ROCJPEG_LIBRARY} \n\tIncludes:${ROCJPEG_INCLUDE_DIR}${ColourReset}")
 endif()
 
+# find TurboJpeg
+find_library(TurboJpeg_LIBRARIES NAMES libturbojpeg.so PATHS /usr/lib ${TURBO_JPEG_PATH}/lib ${TURBO_JPEG_PATH}/lib64 /opt/libjpeg-turbo/lib)
+find_path(TurboJpeg_INCLUDE_DIRS NAMES turbojpeg.h PATHS /usr/include ${TURBO_JPEG_PATH}/include /opt/libjpeg-turbo/include)
+# mark_as_advanced(TurboJpeg_INCLUDE_DIRS)
+
+# Libjpeg
+find_library(LIBJPEG_LIBRARIES NAMES libjpeg.so PATHS /usr/lib ${TURBO_JPEG_PATH}/lib ${TURBO_JPEG_PATH}/lib64 /opt/libjpeg-turbo/lib)
+find_path(LIBJPEG_INCLUDE_DIR NAMES jpeglib.h PATHS /usr/include ${TURBO_JPEG_PATH}/include /opt/libjpeg-turbo/include)
+
+if(TurboJpeg_LIBRARIES AND TurboJpeg_INCLUDE_DIRS AND LIBJPEG_LIBRARIES AND LIBJPEG_INCLUDE_DIR)
+    set(TURBOJPEG_FOUND TRUE)
+    message("-- ${White}Using TurboJpeg -- \n\tLibraries:${TurboJpeg_LIBRARIES} \n\tIncludes:${TurboJpeg_INCLUDE_DIRS}${ColourReset}")
+endif()
+
 if(HIP_FOUND AND ROCJPEG_FOUND)
     # HIP
     set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} hip::host)
     # rocJPEG
     include_directories (${ROCJPEG_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
     set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${ROCJPEG_LIBRARY})
-    #filesystem: c++ compilers less than equal to 8.5 need explicit link with stdc++fs
-    if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS_EQUAL "8.5")
-      set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} stdc++fs)
-    endif()
-    list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecode.cpp)
-    add_executable(${PROJECT_NAME} ${SOURCES})
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
-    target_link_libraries(${PROJECT_NAME} ${LINK_LIBRARY_LIST})
 else()
     message("-- ERROR!: ${PROJECT_NAME} excluded! please install all the dependencies and try again!")
     if (NOT HIP_FOUND)
@@ -72,3 +78,24 @@ else()
         message(FATAL_ERROR "-- ERROR!: rocJPEG Not Found! - please install rocJPEG!")
     endif()
 endif()
+
+if(TURBOJPEG_FOUND)
+    # TurboJpeg
+    include_directories (${TurboJpeg_INCLUDE_DIRS} ${LIBJPEG_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${TurboJpeg_LIBRARIES} ${LIBJPEG_LIBRARIES})
+else()
+    message("-- ERROR!: ${PROJECT_NAME} excluded! please install all the dependencies and try again!")
+    if (NOT TURBOJPEG_FOUND)
+        message(FATAL_ERROR "-- ERROR!: turboJpeg Not Found! - please install turboJpeg!")
+    endif()
+endif()
+
+#filesystem: c++ compilers less than equal to 8.5 need explicit link with stdc++fs
+if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS_EQUAL "8.5")
+  set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} stdc++fs)
+endif()
+
+list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecode.cpp)
+add_executable(${PROJECT_NAME} ${SOURCES})
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
+target_link_libraries(${PROJECT_NAME} ${LINK_LIBRARY_LIST})
