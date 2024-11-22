@@ -263,6 +263,7 @@ int main(int argc, char **argv) {
     }
 
     if (is_dir) {
+        double total_decode_time = time_per_image_all / 1000;
         time_per_image_all = time_per_image_all / total_images;
         images_per_sec = 1000 / time_per_image_all;
         double mpixels_per_sec = mpixels_all * images_per_sec / total_images;
@@ -284,6 +285,7 @@ int main(int argc, char **argv) {
             std::cout << std::endl;
         }
         if (total_images) {
+            std::cout << "Total decoding time for all images (s): " << total_decode_time << std::endl;
             std::cout << "Average processing time per image (ms): " << time_per_image_all << std::endl;
             std::cout << "Average decoded images per sec (Images/Sec): " << images_per_sec << std::endl;
             std::cout << "Average decoded images size (Mpixels/Sec): " << mpixels_per_sec << std::endl;
