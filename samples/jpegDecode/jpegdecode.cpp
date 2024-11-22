@@ -52,7 +52,9 @@ int main(int argc, char **argv) {
     uint64_t num_jpegs_with_411_subsampling = 0;
     uint64_t num_jpegs_with_unknown_subsampling = 0;
     uint64_t num_jpegs_with_unsupported_resolution = 0;
-    int hw_decode = 1;
+
+    // Introduce variabled required for TurboJpeg decoding
+    int hw_decode = 1;  // Default set to 1 to run Hardware decoder
     tjhandle m_jpegDecompressor;
     int width = 0, height = 0, color_comps = 0;
     int output_buffer_size = 0;
@@ -181,7 +183,7 @@ int main(int argc, char **argv) {
             {
                 // ignore "Could not determine Subsampling type error"
                 if (std::string(tjGetErrorStr2(m_jpegDecompressor)).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
-                    std::cerr<<"Jpeg header decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
+                    std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(m_jpegDecompressor));
                     num_jpegs_with_unknown_subsampling++;
                 }
             }
@@ -189,9 +191,7 @@ int main(int argc, char **argv) {
             heights[0] = height;
             // allocate memory for output buffer.
             auto current_image_size = (((width * height * 3) / 256) * 256) + 256;
-            std::cerr << "Width : " << width << " Height : " << height << " Buffer size : " << current_image_size << "\n";
             if (!output_buffer || current_image_size > output_buffer_size) {
-                std::cerr << "Output buffer allocation\n";
                 output_buffer_size = current_image_size;
                 output_buffer = static_cast<unsigned char *>(malloc(output_buffer_size));
             }
@@ -202,19 +202,16 @@ int main(int argc, char **argv) {
             CHECK_ROCJPEG(rocJpegDecode(rocjpeg_handle, rocjpeg_stream_handle, &decode_params, &output_image));
         } else {
             num_channels = 3; // Temporarily assuming RGB images
-            if (output_buffer) {
-                std::cerr << "Output buffer allocated.............\n";
-            }
             int tjpf = TJPF_RGB;
             if (tjDecompress2(m_jpegDecompressor,
-                            reinterpret_cast<uint8_t*>(file_data.data()),
-                            file_size,
-                            output_buffer,
-                            width,
-                            width * num_channels,
-                            height,
-                            tjpf,
-                            TJFLAG_ACCURATEDCT) != 0) {
+                              reinterpret_cast<uint8_t*>(file_data.data()),
+                              file_size,
+                              output_buffer,
+                              width,
+                              width * num_channels,
+                              height,
+                              tjpf,
+                              TJFLAG_ACCURATEDCT) != 0) {
                 std::cerr<< "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
                 num_bad_jpegs ++;
             }
