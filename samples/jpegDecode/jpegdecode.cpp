@@ -52,13 +52,13 @@ int main(int argc, char **argv) {
     uint64_t num_jpegs_with_411_subsampling = 0;
     uint64_t num_jpegs_with_unknown_subsampling = 0;
     uint64_t num_jpegs_with_unsupported_resolution = 0;
-    bool hw_decode = false;
+    int hw_decode = 1;
     tjhandle m_jpegDecompressor;
     int width = 0, height = 0, color_comps = 0;
     int output_buffer_size = 0;
     unsigned char* output_buffer = nullptr; 
 
-    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, decode_params, nullptr, nullptr, argc, argv);
+    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, hw_decode, decode_params, nullptr, nullptr, argc, argv);
 
     bool is_roi_valid = false;
     uint32_t roi_width;
