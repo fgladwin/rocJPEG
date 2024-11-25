@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include "../rocjpeg_samples_utils.h"
+#include <turbojpeg.h>
 
 int main(int argc, char **argv) {
     int device_id = 0;
@@ -64,7 +65,20 @@ int main(int argc, char **argv) {
     uint64_t num_jpegs_with_unknown_subsampling = 0;
     uint64_t num_jpegs_with_unsupported_resolution = 0;
 
-    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, decode_params, nullptr, &batch_size, argc, argv);
+    // RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, decode_params, nullptr, &batch_size, argc, argv);
+    // Introduce variabled required for TurboJpeg decoding
+    int hw_decode = 1;  // Default set to 1 to run Hardware decoder
+    tjhandle m_jpegDecompressor[batch_size];
+    int width[batch_size] = 0, height[batch_size] = 0, color_comps[batch_size] = 0;
+    int output_buffer_size[batch_size] = 0;
+    unsigned char** output_buffer = nullptr; 
+    // Initialize the buffers
+    for (int i = 0; i < batch_size; ++i) {
+        output_buffers[i] = nullptr;
+        output_buffer_sizes[i] = 0; // Initialize size to 0
+    }
+    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, hw_decode, decode_params, nullptr, &batch_size, argc, argv);
+
     
     bool is_roi_valid = false;
     uint32_t roi_width;
@@ -76,17 +90,25 @@ int main(int argc, char **argv) {
         std::cerr << "ERROR: Failed to get input file paths!" << std::endl;
         return EXIT_FAILURE;
     }
-    if (!RocJpegUtils::InitHipDevice(device_id)) {
-        std::cerr << "ERROR: Failed to initialize HIP!" << std::endl;
-        return EXIT_FAILURE;
-    }
+    if(hw_decode)
+    {
+        if (!RocJpegUtils::InitHipDevice(device_id)) {
+            std::cerr << "ERROR: Failed to initialize HIP!" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-    CHECK_ROCJPEG(rocJpegCreate(rocjpeg_backend, device_id, &rocjpeg_handle));
-    batch_size = std::min(batch_size, static_cast<int>(file_paths.size()));
-    rocjpeg_stream_handles.resize(batch_size);
-    // create stream handles of batch size
-    for(auto i = 0; i < batch_size; i++) {
-        CHECK_ROCJPEG(rocJpegStreamCreate(&rocjpeg_stream_handles[i]));
+        CHECK_ROCJPEG(rocJpegCreate(rocjpeg_backend, device_id, &rocjpeg_handle));
+        batch_size = std::min(batch_size, static_cast<int>(file_paths.size()));
+        rocjpeg_stream_handles.resize(batch_size);
+        // create stream handles of batch size
+        for(auto i = 0; i < batch_size; i++) {
+            CHECK_ROCJPEG(rocJpegStreamCreate(&rocjpeg_stream_handles[i]));
+        }
+    }
+    else {
+        for(auto i = 0; i < batch_size; i++) {
+            m_jpegDecompressor[i] = tjInitDecompress();
+        }
     }
 
     batch_images.resize(batch_size);
@@ -128,109 +150,158 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
             }
 
-            RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(batch_images[index].data()), file_size, rocjpeg_stream_handles[index]);
-            if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
-                if (is_dir) {
-                    bad_image_indices.push_back(index);
-                    num_bad_jpegs++;
-                    std::cerr << "Skipping decoding input file: " << file_paths[j] << std::endl;
-                    continue;
-                } else {
-                    std::cerr << "ERROR: Failed to parse the input jpeg stream with " << rocJpegGetErrorName(rocjpeg_status) << std::endl;
-                    return EXIT_FAILURE;
-                }
-            }
-
-            CHECK_ROCJPEG(rocJpegGetImageInfo(rocjpeg_handle, rocjpeg_stream_handles[index], &num_components, &subsamplings[index], widths[index].data(), heights[index].data()));
-
-            if (roi_width > 0 && roi_height > 0 && roi_width <= widths[index][0] && roi_height <= heights[index][0]) {
-                is_roi_valid = true; 
-            }
-
-            rocjpeg_utils.GetChromaSubsamplingStr(subsamplings[index], chroma_sub_sampling);
-            if (widths[index][0] < 64 || heights[index][0] < 64) {
-                if (is_dir) {
-                    bad_image_indices.push_back(index);
-                    num_jpegs_with_unsupported_resolution++;
-                    continue;
-                } else {
-                    std::cerr << "The image resolution is not supported by VCN Hardware" << std::endl;
-                    return EXIT_FAILURE;
-                }
-            }
-
-            if (subsamplings[index] == ROCJPEG_CSS_411 || subsamplings[index] == ROCJPEG_CSS_UNKNOWN) {
-                if (is_dir) {
-                    bad_image_indices.push_back(index);
-                if (subsamplings[index] == ROCJPEG_CSS_411) {
-                    num_jpegs_with_411_subsampling++;
-                }
-                if (subsamplings[index] == ROCJPEG_CSS_UNKNOWN) {
-                    num_jpegs_with_unknown_subsampling++;
-                }
-                continue;
-                } else {
-                    std::cerr << "The chroma sub-sampling is not supported by VCN Hardware" << std::endl;
-                    return EXIT_FAILURE;
-                }
-            }
-
-            if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params, subsamplings[index], widths[index].data(), heights[index].data(), num_channels, output_images[index], channel_sizes)) {
-                std::cerr << "ERROR: Failed to get the channel pitch and sizes" << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            // allocate memory for each channel and reuse them if the sizes remain unchanged for a new image.
-            for (int n = 0; n < num_channels; n++) {
-                if (prior_channel_sizes[index][n] != channel_sizes[n]) {
-                    if (output_images[index].channel[n] != nullptr) {
-                        CHECK_HIP(hipFree((void *)output_images[index].channel[n]));
-                        output_images[index].channel[n] = nullptr;
+            if(hw_decode)
+            {
+                RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(batch_images[index].data()), file_size, rocjpeg_stream_handles[index]);
+                if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
+                    if (is_dir) {
+                        bad_image_indices.push_back(index);
+                        num_bad_jpegs++;
+                        std::cerr << "Skipping decoding input file: " << file_paths[j] << std::endl;
+                        continue;
+                    } else {
+                        std::cerr << "ERROR: Failed to parse the input jpeg stream with " << rocJpegGetErrorName(rocjpeg_status) << std::endl;
+                        return EXIT_FAILURE;
                     }
-                    CHECK_HIP(hipMalloc(&output_images[index].channel[n], channel_sizes[n]));
-                    prior_channel_sizes[index][n] = channel_sizes[n];
+                }
+
+                CHECK_ROCJPEG(rocJpegGetImageInfo(rocjpeg_handle, rocjpeg_stream_handles[index], &num_components, &subsamplings[index], widths[index].data(), heights[index].data()));
+
+                if (roi_width > 0 && roi_height > 0 && roi_width <= widths[index][0] && roi_height <= heights[index][0]) {
+                    is_roi_valid = true; 
+                }
+
+                rocjpeg_utils.GetChromaSubsamplingStr(subsamplings[index], chroma_sub_sampling);
+                if (widths[index][0] < 64 || heights[index][0] < 64) {
+                    if (is_dir) {
+                        bad_image_indices.push_back(index);
+                        num_jpegs_with_unsupported_resolution++;
+                        continue;
+                    } else {
+                        std::cerr << "The image resolution is not supported by VCN Hardware" << std::endl;
+                        return EXIT_FAILURE;
+                    }
+                }
+
+                if (subsamplings[index] == ROCJPEG_CSS_411 || subsamplings[index] == ROCJPEG_CSS_UNKNOWN) {
+                    if (is_dir) {
+                        bad_image_indices.push_back(index);
+                    if (subsamplings[index] == ROCJPEG_CSS_411) {
+                        num_jpegs_with_411_subsampling++;
+                    }
+                    if (subsamplings[index] == ROCJPEG_CSS_UNKNOWN) {
+                        num_jpegs_with_unknown_subsampling++;
+                    }
+                    continue;
+                    } else {
+                        std::cerr << "The chroma sub-sampling is not supported by VCN Hardware" << std::endl;
+                        return EXIT_FAILURE;
+                    }
+                }
+
+                if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params, subsamplings[index], widths[index].data(), heights[index].data(), num_channels, output_images[index], channel_sizes)) {
+                    std::cerr << "ERROR: Failed to get the channel pitch and sizes" << std::endl;
+                    return EXIT_FAILURE;
+                }
+
+                // allocate memory for each channel and reuse them if the sizes remain unchanged for a new image.
+                for (int n = 0; n < num_channels; n++) {
+                    if (prior_channel_sizes[index][n] != channel_sizes[n]) {
+                        if (output_images[index].channel[n] != nullptr) {
+                            CHECK_HIP(hipFree((void *)output_images[index].channel[n]));
+                            output_images[index].channel[n] = nullptr;
+                        }
+                        CHECK_HIP(hipMalloc(&output_images[index].channel[n], channel_sizes[n]));
+                        prior_channel_sizes[index][n] = channel_sizes[n];
+                    }
+                }
+
+            }
+            else
+            {
+                //TODO : Use the most recent TurboJpeg API tjDecompressHeader3 which returns the color components
+                if(tjDecompressHeader2(m_jpegDecompressor[index],
+                                        reinterpret_cast<uint8_t*>(batch_images[index].data()),
+                                        file_size,
+                                        &width[index],
+                                        &height[index],
+                                        &color_comps[index]) != 0)
+                {
+                    // ignore "Could not determine Subsampling type error"
+                    if (std::string(tjGetErrorStr2(m_jpegDecompressor[index])).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
+                        std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(m_jpegDecompressor[index]));
+                        num_jpegs_with_unknown_subsampling++;
+                    }
+                }
+                // allocate memory for output buffer.
+                auto current_image_size = (((width[index] * height[index] * 3) / 256) * 256) + 256;
+                if (!output_buffers[i] || current_image_size > output_buffer_sizes[i]) {
+                    output_buffer_sizes[i] = current_image_size;
+                    output_buffers[i] = static_cast<unsigned char *>(malloc(output_buffer_sizes[i]));
                 }
             }
         }
-        int current_batch_size = batch_end - i - bad_image_indices.size();
 
-        // Select valid images for decoding
-        if (current_batch_size > 0) {
-            if (!bad_image_indices.empty()) {
-                // Iterate through the batch images and select only the valid ones
-                int valid_idx = 0;
-                for (int idx = 0; idx < batch_size; idx++) {
-                    // Check if the current image index is not in the list of bad image indices
-                    if (std::find(bad_image_indices.begin(), bad_image_indices.end(), idx) == bad_image_indices.end()) {
-                        // Add the valid image index to the corresponding vectors
-                        valid_rocjpeg_stream_handles[valid_idx] = rocjpeg_stream_handles[idx];
-                        valid_subsamplings[valid_idx] = subsamplings[idx];
-                        valid_widths[valid_idx] = widths[idx];
-                        valid_heights[valid_idx] = heights[idx];
-                        valid_prior_channel_sizes[valid_idx] = prior_channel_sizes[idx];
-                        valid_output_images[valid_idx] = output_images[idx];
-                        valid_base_file_names[valid_idx] = base_file_names[idx];
-                        valid_idx++;
+        if(hw_decode)
+        {
+            // Select valid images for decoding
+            int current_batch_size = batch_end - i - bad_image_indices.size();
+            if (current_batch_size > 0) {
+                if (!bad_image_indices.empty()) {
+                    // Iterate through the batch images and select only the valid ones
+                    int valid_idx = 0;
+                    for (int idx = 0; idx < batch_size; idx++) {
+                        // Check if the current image index is not in the list of bad image indices
+                        if (std::find(bad_image_indices.begin(), bad_image_indices.end(), idx) == bad_image_indices.end()) {
+                            // Add the valid image index to the corresponding vectors
+                            valid_rocjpeg_stream_handles[valid_idx] = rocjpeg_stream_handles[idx];
+                            valid_subsamplings[valid_idx] = subsamplings[idx];
+                            valid_widths[valid_idx] = widths[idx];
+                            valid_heights[valid_idx] = heights[idx];
+                            valid_prior_channel_sizes[valid_idx] = prior_channel_sizes[idx];
+                            valid_output_images[valid_idx] = output_images[idx];
+                            valid_base_file_names[valid_idx] = base_file_names[idx];
+                            valid_idx++;
+                        }
                     }
+                } else {
+                    // If there are no bad images, select all the batch images
+                    valid_rocjpeg_stream_handles = rocjpeg_stream_handles;
+                    valid_subsamplings = subsamplings;
+                    valid_widths = widths;
+                    valid_heights = heights;
+                    valid_prior_channel_sizes = prior_channel_sizes;
+                    valid_output_images = output_images;
+                    valid_base_file_names = base_file_names;
                 }
-            } else {
-                // If there are no bad images, select all the batch images
-                valid_rocjpeg_stream_handles = rocjpeg_stream_handles;
-                valid_subsamplings = subsamplings;
-                valid_widths = widths;
-                valid_heights = heights;
-                valid_prior_channel_sizes = prior_channel_sizes;
-                valid_output_images = output_images;
-                valid_base_file_names = base_file_names;
+            }
+
+            double time_per_batch_in_milli_sec = 0;
+            if (current_batch_size > 0) {
+                auto start_time = std::chrono::high_resolution_clock::now();
+                CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, valid_rocjpeg_stream_handles.data(), current_batch_size, &decode_params, valid_output_images.data()));
+                auto end_time = std::chrono::high_resolution_clock::now();
+                time_per_batch_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
             }
         }
-
-        double time_per_batch_in_milli_sec = 0;
-        if (current_batch_size > 0) {
-            auto start_time = std::chrono::high_resolution_clock::now();
-            CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, valid_rocjpeg_stream_handles.data(), current_batch_size, &decode_params, valid_output_images.data()));
-            auto end_time = std::chrono::high_resolution_clock::now();
-            time_per_batch_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+        else
+        {
+            num_channels = 3; // Temporarily assuming RGB images
+            int tjpf = TJPF_RGB;
+            for (int idx = 0; idx < batch_size; idx++) {
+                if (tjDecompress2(m_jpegDecompressor[idx],
+                                reinterpret_cast<uint8_t*>(batch_images[idx].data()),
+                                batch_images[idx].size(),
+                                output_buffer[idx],
+                                widths[idx],
+                                widths[idx] * num_channels,
+                                heights[idx],
+                                tjpf,
+                                TJFLAG_ACCURATEDCT) != 0) {
+                    std::cerr<< "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
+                    num_bad_jpegs ++;
+                }
+            }
         }
 
         double image_size_in_mpixels = 0;
@@ -240,7 +311,7 @@ int main(int argc, char **argv) {
 
         total_images += current_batch_size;
 
-        if (save_images) {
+        if (save_images && hw_decode ) {
             for (int b = 0; b < current_batch_size; b++) {
                 std::string image_save_path = output_file_path;
                 //if ROI is present, need to pass roi_width and roi_height
@@ -288,19 +359,33 @@ int main(int argc, char **argv) {
             std::cout << "Average decoded images size (Mpixels/Sec): " << mpixels_per_sec << std::endl;
         }
     }
-
-    //cleanup
-    for (auto& it : output_images) {
-        for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
-            if (it.channel[i] != nullptr) {
-                CHECK_HIP(hipFree((void *)it.channel[i]));
-                it.channel[i] = nullptr;
+    if(hw_decode)
+    {
+        //cleanup
+        for (auto& it : output_images) {
+            for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
+                if (it.channel[i] != nullptr) {
+                    CHECK_HIP(hipFree((void *)it.channel[i]));
+                    it.channel[i] = nullptr;
+                }
             }
         }
+        CHECK_ROCJPEG(rocJpegDestroy(rocjpeg_handle));
+        for(auto& it : rocjpeg_stream_handles) {
+            CHECK_ROCJPEG(rocJpegStreamDestroy(it));
+        }
     }
-    CHECK_ROCJPEG(rocJpegDestroy(rocjpeg_handle));
-    for(auto& it : rocjpeg_stream_handles) {
-        CHECK_ROCJPEG(rocJpegStreamDestroy(it));
+    else
+    {
+        for(int i= 0; i<batch_size ; i++)
+        {
+            if(output_buffer[i])
+            {
+                free(output_buffer[i]);
+                output_buffer[i] = nullptr;
+            }
+            tjDestroy(m_jpegDecompressor[i]);
+        }
     }
 
     std::cout << "Decoding completed!" << std::endl;
