@@ -69,9 +69,11 @@ int main(int argc, char **argv) {
     // Introduce variabled required for TurboJpeg decoding
     int hw_decode = 1;  // Default set to 1 to run Hardware decoder
     tjhandle m_jpegDecompressor[batch_size];
-    int width[batch_size] = 0, height[batch_size] = 0, color_comps[batch_size] = 0;
-    int output_buffer_size[batch_size] = 0;
-    unsigned char** output_buffer = nullptr; 
+    int width[batch_size], height[batch_size], color_comps[batch_size];
+    int output_buffer_sizes[batch_size];
+    unsigned char** output_buffers = nullptr; 
+    // Allocate memory for output_buffers based on the batch size
+    output_buffers = new unsigned char*[batch_size];
     // Initialize the buffers
     for (int i = 0; i < batch_size; ++i) {
         output_buffers[i] = nullptr;
@@ -235,17 +237,19 @@ int main(int argc, char **argv) {
                 }
                 // allocate memory for output buffer.
                 auto current_image_size = (((width[index] * height[index] * 3) / 256) * 256) + 256;
-                if (!output_buffers[i] || current_image_size > output_buffer_sizes[i]) {
-                    output_buffer_sizes[i] = current_image_size;
-                    output_buffers[i] = static_cast<unsigned char *>(malloc(output_buffer_sizes[i]));
+                if (!output_buffers[index] || current_image_size > output_buffer_sizes[index]) {
+                    output_buffer_sizes[index] = current_image_size;
+                    output_buffers[index] = static_cast<unsigned char *>(malloc(output_buffer_sizes[index]));
                 }
             }
         }
 
+        double time_per_batch_in_milli_sec = 0;
+        double image_size_in_mpixels = 0;
+        int current_batch_size = batch_end - i - bad_image_indices.size();
         if(hw_decode)
         {
             // Select valid images for decoding
-            int current_batch_size = batch_end - i - bad_image_indices.size();
             if (current_batch_size > 0) {
                 if (!bad_image_indices.empty()) {
                     // Iterate through the batch images and select only the valid ones
@@ -276,7 +280,6 @@ int main(int argc, char **argv) {
                 }
             }
 
-            double time_per_batch_in_milli_sec = 0;
             if (current_batch_size > 0) {
                 auto start_time = std::chrono::high_resolution_clock::now();
                 CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, valid_rocjpeg_stream_handles.data(), current_batch_size, &decode_params, valid_output_images.data()));
@@ -286,27 +289,41 @@ int main(int argc, char **argv) {
         }
         else
         {
+            current_batch_size = batch_end - i;
             num_channels = 3; // Temporarily assuming RGB images
             int tjpf = TJPF_RGB;
-            for (int idx = 0; idx < batch_size; idx++) {
+            int batch_end = std::min(i + batch_size, static_cast<int>(file_paths.size()));
+            auto start_time = std::chrono::high_resolution_clock::now();
+            for (int j = i; j < batch_end; j++) {
+                int idx = 0;
                 if (tjDecompress2(m_jpegDecompressor[idx],
                                 reinterpret_cast<uint8_t*>(batch_images[idx].data()),
                                 batch_images[idx].size(),
-                                output_buffer[idx],
-                                widths[idx],
-                                widths[idx] * num_channels,
-                                heights[idx],
+                                output_buffers[idx],
+                                width[idx],
+                                width[idx] * num_channels,
+                                height[idx],
                                 tjpf,
                                 TJFLAG_ACCURATEDCT) != 0) {
                     std::cerr<< "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
-                    num_bad_jpegs ++;
                 }
             }
+            auto end_time = std::chrono::high_resolution_clock::now();
+            time_per_batch_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
         }
 
-        double image_size_in_mpixels = 0;
-        for (int b = 0; b < current_batch_size; b++) {
-            image_size_in_mpixels += (static_cast<double>(valid_widths[b][0]) * static_cast<double>(valid_heights[b][0]) / 1000000);
+        if(hw_decode)
+        {
+            for (int b = 0; b < current_batch_size; b++) {
+                image_size_in_mpixels += (static_cast<double>(valid_widths[b][0]) * static_cast<double>(valid_heights[b][0]) / 1000000);
+            }
+        }
+        else
+        {
+            for (int b = 0; b < current_batch_size; b++) {
+                image_size_in_mpixels += (static_cast<double>(width[b]) * static_cast<double>(height[b]) / 1000000);
+            }
         }
 
         total_images += current_batch_size;
@@ -379,10 +396,10 @@ int main(int argc, char **argv) {
     {
         for(int i= 0; i<batch_size ; i++)
         {
-            if(output_buffer[i])
+            if(output_buffers[i])
             {
-                free(output_buffer[i]);
-                output_buffer[i] = nullptr;
+                free(output_buffers[i]);
+                output_buffers[i] = nullptr;
             }
             tjDestroy(m_jpegDecompressor[i]);
         }
