@@ -221,16 +221,46 @@ int main(int argc, char **argv) {
         double image_size_in_mpixels = (static_cast<double>(widths[0]) * static_cast<double>(heights[0]) / 1000000);
         image_count++;
 
-        if (save_images && hw_decode) {
-            std::string image_save_path = output_file_path;
-            //if ROI is present, need to pass roi_width and roi_height
-            uint32_t width = is_roi_valid ? roi_width : widths[0];
-            uint32_t height = is_roi_valid ? roi_height : heights[0];
-            if (is_dir) {
-                rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_name, width, height, subsampling, image_save_path);
+        if (save_images) {
+            if(hw_decode)
+            {
+                std::string image_save_path = output_file_path;
+                //if ROI is present, need to pass roi_width and roi_height
+                uint32_t width = is_roi_valid ? roi_width : widths[0];
+                uint32_t height = is_roi_valid ? roi_height : heights[0];
+                if (is_dir) {
+                    rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_name, width, height, subsampling, image_save_path);
+                }
+                rocjpeg_utils.SaveImage(image_save_path, &output_image, width, height, subsampling, decode_params.output_format);
             }
-            rocjpeg_utils.SaveImage(image_save_path, &output_image, width, height, subsampling, decode_params.output_format);
+            else
+            {
+                std::string image_save_path = output_file_path;
+                std::string file_extension = "rgb";
+                std::string::size_type const p(base_file_name.find_last_of('.'));
+                std::string file_name_no_ext = base_file_name.substr(0, p);
+                std::string format_description = "packed";
+                image_save_path += "//" + file_name_no_ext + "_" + std::to_string(widths[0]) + "x" + std::to_string(heights[0]) + "_" + format_description + "." + file_extension;
+                uint32_t channel_size = widths[0] * heights[0];
+
+                uint32_t output_image_size = channel_size * 3;  //RGB
+                std::ofstream outfile(image_save_path, std::ios::out | std::ios::binary);
+                if (!outfile) {
+                    std::cerr << "Error: Could not open file " << image_save_path << " for writing." << std::endl;
+                    return EXIT_FAILURE;
+                }
+
+                // Write the raw buffer to the file
+                outfile.write(reinterpret_cast<char*>(output_buffer), output_image_size);
+                if (!outfile) {
+                    std::cerr << "Error: Failed to write data to file " << image_save_path << std::endl;
+                }
+
+                outfile.close();
+                std::cout << "Image saved successfully to " << image_save_path << std::endl;
+            }
         }
+
 
         // std::cout << "Average processing time per image (ms): " << time_per_image_in_milli_sec << std::endl;
         // std::cout << "Average images per sec: " << 1000 / time_per_image_in_milli_sec << std::endl;

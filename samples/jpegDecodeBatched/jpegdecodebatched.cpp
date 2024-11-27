@@ -271,16 +271,48 @@ int main(int argc, char **argv) {
 
         total_images += current_batch_size;
 
-        if (save_images && hw_decode) {
-            for (int b = 0; b < current_batch_size; b++) {
-                std::string image_save_path = output_file_path;
-                //if ROI is present, need to pass roi_width and roi_height
-                uint32_t width = is_roi_valid ? roi_width : widths[b][0];
-                uint32_t height = is_roi_valid ? roi_height : heights[b][0];
-                if (is_dir) {
-                    rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_names[b], width, height, subsamplings[b], image_save_path);
+        if (save_images) {
+            if(hw_decode)
+            {
+                for (int b = 0; b < current_batch_size; b++) {
+                    std::string image_save_path = output_file_path;
+                    //if ROI is present, need to pass roi_width and roi_height
+                    uint32_t width = is_roi_valid ? roi_width : widths[b][0];
+                    uint32_t height = is_roi_valid ? roi_height : heights[b][0];
+                    if (is_dir) {
+                        rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_names[b], width, height, subsamplings[b], image_save_path);
+                    }
+                    rocjpeg_utils.SaveImage(image_save_path, &output_images[b], width, height, subsamplings[b], decode_params.output_format);
                 }
-                rocjpeg_utils.SaveImage(image_save_path, &output_images[b], width, height, subsamplings[b], decode_params.output_format);
+            }
+            else
+            {
+                for (int b = 0; b < current_batch_size; b++) {
+                    std::string image_save_path = output_file_path;
+                    std::string file_extension = "rgb";
+                    std::string base_file_name = file_paths[i + b].substr(file_paths[i + b].find_last_of("/\\") + 1);
+                    std::string::size_type const p(base_file_name.find_last_of('.'));
+                    std::string file_name_no_ext = base_file_name.substr(0, p);
+                    std::string format_description = "packed";
+                    image_save_path += "//" + file_name_no_ext + "_" + std::to_string(width[b]) + "x" + std::to_string(height[b]) + "_" + format_description + "." + file_extension;
+                    uint32_t channel_size = width[b] * height[b];
+
+                    uint32_t output_image_size = channel_size * 3;  //RGB
+                    std::ofstream outfile(image_save_path, std::ios::out | std::ios::binary);
+                    if (!outfile) {
+                        std::cerr << "Error: Could not open file " << image_save_path << " for writing." << std::endl;
+                        return EXIT_FAILURE;
+                    }
+
+                    // Write the raw buffer to the file
+                    outfile.write(reinterpret_cast<char*>(output_buffers[b]), output_image_size);
+                    if (!outfile) {
+                        std::cerr << "Error: Failed to write data to file " << image_save_path << std::endl;
+                    }
+
+                    outfile.close();
+                }
+                std::cout << "Image saved successfully to " << image_save_path << std::endl;
             }
         }
 
