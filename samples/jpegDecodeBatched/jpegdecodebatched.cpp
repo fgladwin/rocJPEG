@@ -65,6 +65,8 @@ int main(int argc, char **argv) {
 
     // Introduce variabled required for TurboJpeg decoding
     int hw_decode = 1;  // Default set to 1 to run Hardware decoder
+    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, hw_decode, decode_params, nullptr, &batch_size, argc, argv);
+
     tjhandle m_jpegDecompressor[batch_size];
     int width[batch_size], height[batch_size], color_comps[batch_size];
     int output_buffer_sizes[batch_size];
@@ -76,9 +78,6 @@ int main(int argc, char **argv) {
         output_buffers[i] = nullptr;
         output_buffer_sizes[i] = 0; // Initialize size to 0
     }
-    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, hw_decode, decode_params, nullptr, &batch_size, argc, argv);
-
-    
     bool is_roi_valid = false;
     uint32_t roi_width;
     uint32_t roi_height;
@@ -207,7 +206,6 @@ int main(int argc, char **argv) {
                 widths[current_batch_size] = temp_widths;
                 heights[current_batch_size] = temp_heights;
                 base_file_names[current_batch_size] = temp_base_file_name;
-                current_batch_size++;
             } else {
                 //TODO : Use the most recent TurboJpeg API tjDecompressHeader3 which returns the color components
                 if(tjDecompressHeader2(m_jpegDecompressor[index],
@@ -230,6 +228,7 @@ int main(int argc, char **argv) {
                     output_buffers[index] = static_cast<unsigned char *>(malloc(output_buffer_sizes[index]));
                 }
             }
+            current_batch_size++;
         }
 
         double time_per_batch_in_milli_sec = 0;
@@ -238,12 +237,9 @@ int main(int argc, char **argv) {
             if (hw_decode) {
                 CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, rocjpeg_stream_handles_for_current_batch.data(), current_batch_size, &decode_params, output_images.data()));
             } else {
-                current_batch_size = batch_end - i;
                 num_channels = 3; // Temporarily assuming RGB images
                 int tjpf = TJPF_RGB;
-                int batch_end = std::min(i + batch_size, static_cast<int>(file_paths.size()));
-                auto start_time = std::chrono::high_resolution_clock::now();
-                for (int j = i; j < batch_end; j++) {
+                for (int j = 0; j < current_batch_size; j++) {
                     int idx = 0;
                     if (tjDecompress2(m_jpegDecompressor[idx],
                                     reinterpret_cast<uint8_t*>(batch_images[idx].data()),
@@ -297,6 +293,7 @@ int main(int argc, char **argv) {
     }
 
     if (is_dir) {
+        double total_decode_time = time_per_image_all / 1000; 
         time_per_image_all = time_per_image_all / total_images;
         images_per_sec = 1000 / time_per_image_all;
         double mpixels_per_sec = mpixels_all * images_per_sec / total_images;
@@ -318,6 +315,7 @@ int main(int argc, char **argv) {
             std::cout << std::endl;
         }
         if (total_images) {
+            std::cout << "Total decoding time for all images (s): " << total_decode_time << std::endl;
             std::cout << "Average processing time per image (ms): " << time_per_image_all << std::endl;
             std::cout << "Average decoded images per sec (Images/Sec): " << images_per_sec << std::endl;
             std::cout << "Average decoded images size (Mpixels/Sec): " << mpixels_per_sec << std::endl;
