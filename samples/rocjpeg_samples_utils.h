@@ -87,7 +87,7 @@ public:
      * @param argv The command line arguments.
      */
     static void ParseCommandLine(std::string &input_path, std::string &output_file_path, bool &save_images, int &device_id,
-                                 RocJpegBackend &rocjpeg_backend, RocJpegDecodeParams &decode_params, int *num_threads, int *batch_size, int argc, char *argv[]) {
+                                 RocJpegBackend &rocjpeg_backend, int &hw_decode, RocJpegDecodeParams &decode_params, int *num_threads, int *batch_size, int argc, char *argv[]) {
         if(argc <= 1) {
             ShowHelpAndExit("", num_threads != nullptr, batch_size != nullptr);
         }
@@ -172,6 +172,13 @@ public:
                     std::cout << "output crop rectangle must have width and height of even numbers" << std::endl;
                     exit(1);
                 }
+                continue;
+            }
+            if (!strcmp(argv[i], "-decoder")) {
+                if (++i == argc) {
+                    ShowHelpAndExit("-decoder", num_threads != nullptr, batch_size != nullptr);
+                }
+                hw_decode = atoi(argv[i]);
                 continue;
             }
             ShowHelpAndExit(argv[i], num_threads != nullptr, batch_size != nullptr);
@@ -639,13 +646,14 @@ private:
      */
     static void ShowHelpAndExit(const char *option = nullptr, bool show_threads = false, bool show_batch_size = false) {
         std::cout  << "Options:\n"
-        "-i     [input path] - input path to a single JPEG image or a directory containing JPEG images - [required]\n"
-        "-be    [backend] - select rocJPEG backend (0 for hardware-accelerated JPEG decoding using VCN,\n"
+        "-i       [input path] - input path to a single JPEG image or a directory containing JPEG images - [required]\n"
+        "-be      [backend] - select rocJPEG backend (0 for hardware-accelerated JPEG decoding using VCN,\n"
         "                                           1 for hybrid JPEG decoding using CPU and GPU HIP kernels (currently not supported)) [optional - default: 0]\n"
-        "-fmt   [output format] - select rocJPEG output format for decoding, one of the [native, yuv_planar, y, rgb, rgb_planar] - [optional - default: native]\n"
-        "-o     [output path] - path to an output file or a path to an existing directory - write decoded images to a file or an existing directory based on selected output format - [optional]\n"
-        "-crop  [crop rectangle] - crop rectangle for output in a comma-separated format: left,top,right,bottom - [optional]\n"
-        "-d     [device id] - specify the GPU device id for the desired device (use 0 for the first device, 1 for the second device, and so on) [optional - default: 0]\n";
+        "-fmt     [output format] - select rocJPEG output format for decoding, one of the [native, yuv_planar, y, rgb, rgb_planar] - [optional - default: native]\n"
+        "-o       [output path] - path to an output file or a path to an existing directory - write decoded images to a file or an existing directory based on selected output format - [optional]\n"
+        "-crop    [crop rectangle] - crop rectangle for output in a comma-separated format: left,top,right,bottom - [optional]\n"
+        "-d       [device id] - specify the GPU device id for the desired device (use 0 for the first device, 1 for the second device, and so on) [optional - default: 0]\n"
+        "-decoder [decoder type] - select decoder type (0 for turboJpeg , 1 for the rocJpeg) [optional - default: 1]\n";
         if (show_threads) {
             std::cout << "-t     [threads] - number of threads (<= 32) for parallel JPEG decoding - [optional - default: 1]\n";
         }

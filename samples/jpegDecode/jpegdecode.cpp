@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include "../rocjpeg_samples_utils.h"
+#include <turbojpeg.h>
 
 int main(int argc, char **argv) {
     int device_id = 0;
@@ -52,7 +53,14 @@ int main(int argc, char **argv) {
     uint64_t num_jpegs_with_unknown_subsampling = 0;
     uint64_t num_jpegs_with_unsupported_resolution = 0;
 
-    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, decode_params, nullptr, nullptr, argc, argv);
+    // Introduce variabled required for TurboJpeg decoding
+    int hw_decode = 1;  // Default set to 1 to run Hardware decoder
+    tjhandle m_jpegDecompressor;
+    int width = 0, height = 0, color_comps = 0;
+    int output_buffer_size = 0;
+    unsigned char* output_buffer = nullptr; 
+
+    RocJpegUtils::ParseCommandLine(input_path, output_file_path, save_images, device_id, rocjpeg_backend, hw_decode, decode_params, nullptr, nullptr, argc, argv);
 
     bool is_roi_valid = false;
     uint32_t roi_width;
@@ -64,13 +72,17 @@ int main(int argc, char **argv) {
         std::cerr << "ERROR: Failed to get input file paths!" << std::endl;
         return EXIT_FAILURE;
     }
-    if (!RocJpegUtils::InitHipDevice(device_id)) {
-        std::cerr << "ERROR: Failed to initialize HIP!" << std::endl;
-        return EXIT_FAILURE;
-    }
+    if (hw_decode) {
+        if (!RocJpegUtils::InitHipDevice(device_id)) {
+            std::cerr << "ERROR: Failed to initialize HIP!" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-    CHECK_ROCJPEG(rocJpegCreate(rocjpeg_backend, device_id, &rocjpeg_handle));
-    CHECK_ROCJPEG(rocJpegStreamCreate(&rocjpeg_stream_handle));
+        CHECK_ROCJPEG(rocJpegCreate(rocjpeg_backend, device_id, &rocjpeg_handle));
+        CHECK_ROCJPEG(rocJpegStreamCreate(&rocjpeg_stream_handle));
+    } else {
+        m_jpegDecompressor = tjInitDecompress();
+    }
 
     std::vector<char> file_data;
     for (auto file_path : file_paths) {
@@ -96,89 +108,162 @@ int main(int argc, char **argv) {
         }
 
         std::cout << "Input file name: " << file_path << std::endl;
-        RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(file_data.data()), file_size, rocjpeg_stream_handle);
-        if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
-            if (is_dir) {
-                std::cout << std::endl;
-                num_bad_jpegs++;
-                continue;
-            } else {
-                std::cerr << "ERROR: Failed to parse the input jpeg stream with " << rocJpegGetErrorName(rocjpeg_status) << std::endl;
-                return EXIT_FAILURE;
-            }
-        }
 
-        CHECK_ROCJPEG(rocJpegGetImageInfo(rocjpeg_handle, rocjpeg_stream_handle, &num_components, &subsampling, widths, heights));
-
-        if (roi_width > 0 && roi_height > 0 && roi_width <= widths[0] && roi_height <= heights[0]) {
-            is_roi_valid = true;
-        }
-
-        rocjpeg_utils.GetChromaSubsamplingStr(subsampling, chroma_sub_sampling);
-        std::cout << "Input image resolution: " << widths[0] << "x" << heights[0] << std::endl;
-        std::cout << "Chroma subsampling: " + chroma_sub_sampling  << std::endl;
-        if (widths[0] < 64 || heights[0] < 64) {
-            std::cerr << "The image resolution is not supported by VCN Hardware" << std::endl;
-            if (is_dir) {
-                num_jpegs_with_unsupported_resolution++;
-                std::cout << std::endl;
-                continue;
-            } else
-                return EXIT_FAILURE;
-        }
-        if (subsampling == ROCJPEG_CSS_411 || subsampling == ROCJPEG_CSS_UNKNOWN) {
-            std::cerr << "The chroma sub-sampling is not supported by VCN Hardware" << std::endl;
-            if (is_dir) {
-                if (subsampling == ROCJPEG_CSS_411)
-                    num_jpegs_with_411_subsampling++;
-                if (subsampling == ROCJPEG_CSS_UNKNOWN)
-                    num_jpegs_with_unknown_subsampling++;
-                std::cout << std::endl;
-                continue;
-            } else
-                return EXIT_FAILURE;
-        }
-
-        if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params, subsampling, widths, heights, num_channels, output_image, channel_sizes)) {
-            std::cerr << "ERROR: Failed to get the channel pitch and sizes" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        // allocate memory for each channel and reuse them if the sizes remain unchanged for a new image.
-        for (int i = 0; i < num_channels; i++) {
-            if (prior_channel_sizes[i] != channel_sizes[i]) {
-                if (output_image.channel[i] != nullptr) {
-                    CHECK_HIP(hipFree((void *)output_image.channel[i]));
-                    output_image.channel[i] = nullptr;
+        if (hw_decode) {
+            RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(file_data.data()), file_size, rocjpeg_stream_handle);
+            if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
+                if (is_dir) {
+                    std::cout << std::endl;
+                    num_bad_jpegs++;
+                    continue;
+                } else {
+                    std::cerr << "ERROR: Failed to parse the input jpeg stream with " << rocJpegGetErrorName(rocjpeg_status) << std::endl;
+                    return EXIT_FAILURE;
                 }
-                CHECK_HIP(hipMalloc(&output_image.channel[i], channel_sizes[i]));
             }
-        }
 
-        if (is_roi_valid) {
-            std::cout << "Cropped image resolution: " << roi_width << "x" <<  roi_height << std::endl;
+            CHECK_ROCJPEG(rocJpegGetImageInfo(rocjpeg_handle, rocjpeg_stream_handle, &num_components, &subsampling, widths, heights));
+
+            if (roi_width > 0 && roi_height > 0 && roi_width <= widths[0] && roi_height <= heights[0]) {
+                is_roi_valid = true;
+            }
+
+            rocjpeg_utils.GetChromaSubsamplingStr(subsampling, chroma_sub_sampling);
+            // std::cout << "Input image resolution: " << widths[0] << "x" << heights[0] << std::endl;
+            // std::cout << "Chroma subsampling: " + chroma_sub_sampling  << std::endl;
+            if (widths[0] < 64 || heights[0] < 64) {
+                std::cerr << "The image resolution is not supported by VCN Hardware" << std::endl;
+                if (is_dir) {
+                    num_jpegs_with_unsupported_resolution++;
+                    std::cout << std::endl;
+                    continue;
+                } else
+                    return EXIT_FAILURE;
+            }
+            if (subsampling == ROCJPEG_CSS_411 || subsampling == ROCJPEG_CSS_UNKNOWN) {
+                std::cerr << "The chroma sub-sampling is not supported by VCN Hardware" << std::endl;
+                if (is_dir) {
+                    if (subsampling == ROCJPEG_CSS_411)
+                        num_jpegs_with_411_subsampling++;
+                    if (subsampling == ROCJPEG_CSS_UNKNOWN)
+                        num_jpegs_with_unknown_subsampling++;
+                    std::cout << std::endl;
+                    continue;
+                } else
+                    return EXIT_FAILURE;
+            }
+
+            if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params, subsampling, widths, heights, num_channels, output_image, channel_sizes)) {
+                std::cerr << "ERROR: Failed to get the channel pitch and sizes" << std::endl;
+                return EXIT_FAILURE;
+            }
+
+            // allocate memory for each channel and reuse them if the sizes remain unchanged for a new image.
+            for (int i = 0; i < num_channels; i++) {
+                if (prior_channel_sizes[i] != channel_sizes[i]) {
+                    if (output_image.channel[i] != nullptr) {
+                        CHECK_HIP(hipFree((void *)output_image.channel[i]));
+                        output_image.channel[i] = nullptr;
+                    }
+                    CHECK_HIP(hipMalloc(&output_image.channel[i], channel_sizes[i]));
+                }
+            }
+
+            if (is_roi_valid) {
+                std::cout << "Cropped image resolution: " << roi_width << "x" <<  roi_height << std::endl;
+            }
+        } else {
+            //TODO : Use the most recent TurboJpeg API tjDecompressHeader3 which returns the color components
+            if(tjDecompressHeader2(m_jpegDecompressor,
+                                    reinterpret_cast<uint8_t*>(file_data.data()),
+                                    file_size,
+                                    &width,
+                                    &height,
+                                    &color_comps) != 0)
+            {
+                // ignore "Could not determine Subsampling type error"
+                if (std::string(tjGetErrorStr2(m_jpegDecompressor)).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
+                    std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(m_jpegDecompressor));
+                    num_jpegs_with_unknown_subsampling++;
+                }
+            }
+            widths[0] = width;
+            heights[0] = height;
+            // allocate memory for output buffer.
+            auto current_image_size = (((width * height * 3) / 256) * 256) + 256;
+            if (!output_buffer || current_image_size > output_buffer_size) {
+                output_buffer_size = current_image_size;
+                output_buffer = static_cast<unsigned char *>(malloc(output_buffer_size));
+            }
         }
         std::cout << "Decoding started, please wait! ... " << std::endl;
         auto start_time = std::chrono::high_resolution_clock::now();
-        CHECK_ROCJPEG(rocJpegDecode(rocjpeg_handle, rocjpeg_stream_handle, &decode_params, &output_image));
+        if (hw_decode) {
+            CHECK_ROCJPEG(rocJpegDecode(rocjpeg_handle, rocjpeg_stream_handle, &decode_params, &output_image));
+        } else {
+            num_channels = 3; // Temporarily assuming RGB images
+            int tjpf = TJPF_RGB;
+            if (tjDecompress2(m_jpegDecompressor,
+                              reinterpret_cast<uint8_t*>(file_data.data()),
+                              file_size,
+                              output_buffer,
+                              width,
+                              width * num_channels,
+                              height,
+                              tjpf,
+                              TJFLAG_ACCURATEDCT) != 0) {
+                std::cerr<< "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
+                num_bad_jpegs ++;
+            }
+        }
         auto end_time = std::chrono::high_resolution_clock::now();
         double time_per_image_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
         double image_size_in_mpixels = (static_cast<double>(widths[0]) * static_cast<double>(heights[0]) / 1000000);
         image_count++;
 
         if (save_images) {
-            std::string image_save_path = output_file_path;
-            //if ROI is present, need to pass roi_width and roi_height
-            uint32_t width = is_roi_valid ? roi_width : widths[0];
-            uint32_t height = is_roi_valid ? roi_height : heights[0];
-            if (is_dir) {
-                rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_name, width, height, subsampling, image_save_path);
+            if(hw_decode)
+            {
+                std::string image_save_path = output_file_path;
+                //if ROI is present, need to pass roi_width and roi_height
+                uint32_t width = is_roi_valid ? roi_width : widths[0];
+                uint32_t height = is_roi_valid ? roi_height : heights[0];
+                if (is_dir) {
+                    rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_name, width, height, subsampling, image_save_path);
+                }
+                rocjpeg_utils.SaveImage(image_save_path, &output_image, width, height, subsampling, decode_params.output_format);
             }
-            rocjpeg_utils.SaveImage(image_save_path, &output_image, width, height, subsampling, decode_params.output_format);
+            else
+            {
+                std::string image_save_path = output_file_path;
+                std::string file_extension = "rgb";
+                std::string::size_type const p(base_file_name.find_last_of('.'));
+                std::string file_name_no_ext = base_file_name.substr(0, p);
+                std::string format_description = "packed";
+                image_save_path += "//" + file_name_no_ext + "_" + std::to_string(widths[0]) + "x" + std::to_string(heights[0]) + "_" + format_description + "." + file_extension;
+                uint32_t channel_size = widths[0] * heights[0];
+
+                uint32_t output_image_size = channel_size * 3;  //RGB
+                std::ofstream outfile(image_save_path, std::ios::out | std::ios::binary);
+                if (!outfile) {
+                    std::cerr << "Error: Could not open file " << image_save_path << " for writing." << std::endl;
+                    return EXIT_FAILURE;
+                }
+
+                // Write the raw buffer to the file
+                outfile.write(reinterpret_cast<char*>(output_buffer), output_image_size);
+                if (!outfile) {
+                    std::cerr << "Error: Failed to write data to file " << image_save_path << std::endl;
+                }
+
+                outfile.close();
+                std::cout << "Image saved successfully to " << image_save_path << std::endl;
+            }
         }
 
-        std::cout << "Average processing time per image (ms): " << time_per_image_in_milli_sec << std::endl;
-        std::cout << "Average images per sec: " << 1000 / time_per_image_in_milli_sec << std::endl;
+
+        // std::cout << "Average processing time per image (ms): " << time_per_image_in_milli_sec << std::endl;
+        // std::cout << "Average images per sec: " << 1000 / time_per_image_in_milli_sec << std::endl;
 
         if (is_dir) {
             std::cout << std::endl;
@@ -186,19 +271,29 @@ int main(int argc, char **argv) {
             time_per_image_all += time_per_image_in_milli_sec;
             mpixels_all += image_size_in_mpixels;
         }
-        for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
-            prior_channel_sizes[i] = channel_sizes[i];
+        if (hw_decode) {
+            for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
+                prior_channel_sizes[i] = channel_sizes[i];
+            }
         }
     }
 
-    for (int i = 0; i < num_channels; i++) {
-        if (output_image.channel[i] != nullptr) {
-            CHECK_HIP(hipFree((void *)output_image.channel[i]));
-            output_image.channel[i] = nullptr;
+    if(hw_decode) {
+        for (int i = 0; i < num_channels; i++) {
+            if (output_image.channel[i] != nullptr) {
+                CHECK_HIP(hipFree((void *)output_image.channel[i]));
+                output_image.channel[i] = nullptr;
+            }
+        }
+    } else {
+        if (output_buffer) {
+            free(output_buffer);
+            output_buffer = nullptr;
         }
     }
 
     if (is_dir) {
+        double total_decode_time = time_per_image_all / 1000;
         time_per_image_all = time_per_image_all / total_images;
         images_per_sec = 1000 / time_per_image_all;
         double mpixels_per_sec = mpixels_all * images_per_sec / total_images;
@@ -220,6 +315,7 @@ int main(int argc, char **argv) {
             std::cout << std::endl;
         }
         if (total_images) {
+            std::cout << "Total decoding time for all images (s): " << total_decode_time << std::endl;
             std::cout << "Average processing time per image (ms): " << time_per_image_all << std::endl;
             std::cout << "Average decoded images per sec (Images/Sec): " << images_per_sec << std::endl;
             std::cout << "Average decoded images size (Mpixels/Sec): " << mpixels_per_sec << std::endl;
@@ -227,8 +323,13 @@ int main(int argc, char **argv) {
         std::cout << std::endl;
     }
 
-    CHECK_ROCJPEG(rocJpegDestroy(rocjpeg_handle));
-    CHECK_ROCJPEG(rocJpegStreamDestroy(rocjpeg_stream_handle));
+    if (hw_decode) {
+        CHECK_ROCJPEG(rocJpegDestroy(rocjpeg_handle));
+        CHECK_ROCJPEG(rocJpegStreamDestroy(rocjpeg_stream_handle));
+    } else {
+        tjDestroy(m_jpegDecompressor);
+    }
+
     std::cout << "Decoding completed!" << std::endl;
     return EXIT_SUCCESS;
 }
