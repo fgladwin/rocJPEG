@@ -78,12 +78,15 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     int output_buffer_sizes[batch_size];
     unsigned char** output_buffers = nullptr; 
     // Allocate memory for output_buffers based on the batch size
-    output_buffers = new unsigned char*[batch_size];
-    // Initialize the buffers
-    for (int i = 0; i < batch_size; ++i) {
-        m_jpegDecompressor[i] = tjInitDecompress();
-        output_buffers[i] = nullptr;
-        output_buffer_sizes[i] = 0; // Initialize size to 0
+
+    if (!hw_decode) {
+        output_buffers = new unsigned char*[batch_size];
+        // Initialize the buffers
+        for (int i = 0; i < batch_size; ++i) {
+            m_jpegDecompressor[i] = tjInitDecompress();
+            output_buffers[i] = nullptr;
+            output_buffer_sizes[i] = 0; // Initialize size to 0
+        }
     }
 
     for (int i = 0; i < decode_info.file_paths.size(); i += batch_size) {
@@ -110,8 +113,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                 return;
             }
 
-            if(hw_decode)
-            {
+            if(hw_decode) {
                 RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(batch_images[index].data()), file_size, decode_info.rocjpeg_stream_handles[index]);
                 if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
                     decode_info.num_bad_jpegs++;
@@ -162,10 +164,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                 widths[current_batch_size] = temp_widths;
                 heights[current_batch_size] = temp_heights;
                 base_file_names[current_batch_size] = temp_base_file_name;
-                current_batch_size++;
-            }
-            else
-            {
+            } else {
                 m_jpegDecompressor[index] = tjInitDecompress();
                 //TODO : Use the most recent TurboJpeg API tjDecompressHeader3 which returns the color components
                 if(tjDecompressHeader2(m_jpegDecompressor[index],
@@ -173,8 +172,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                                         file_size,
                                         &width[index],
                                         &height[index],
-                                        &color_comps[index]) != 0)
-                {
+                                        &color_comps[index]) != 0) {
                     // ignore "Could not determine Subsampling type error"
                     if (std::string(tjGetErrorStr2(m_jpegDecompressor[index])).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
                         std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(m_jpegDecompressor[index]));
@@ -188,29 +186,26 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                     output_buffers[index] = static_cast<unsigned char *>(malloc(output_buffer_sizes[index]));
                 }
             }
-
+            current_batch_size++;
         }
 
         double time_per_batch_in_milli_sec = 0;
         double image_size_in_mpixels = 0;
-        if(hw_decode)
-        {
+        if(hw_decode) {
             if (current_batch_size > 0) {
                 auto start_time = std::chrono::high_resolution_clock::now();
                 CHECK_ROCJPEG(rocJpegDecodeBatched(decode_info.rocjpeg_handle, rocjpeg_stream_handles.data(), current_batch_size, &decode_params, output_images.data()));
                 auto end_time = std::chrono::high_resolution_clock::now();
                 time_per_batch_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
             }
-        }
-        else
-        {
-            current_batch_size = batch_end - i;
+            for (int b = 0; b < current_batch_size; b++) {
+                image_size_in_mpixels += (static_cast<double>(widths[b][0]) * static_cast<double>(heights[b][0]) / 1000000);
+            }
+        } else {
             num_channels = 3; // Temporarily assuming RGB images
             int tjpf = TJPF_RGB;
-            int batch_end = std::min(i + batch_size, static_cast<int>(decode_info.file_paths.size()));
             auto start_time = std::chrono::high_resolution_clock::now();
-            for (int j = i; j < batch_end; j++) {
-                int idx = j-i;
+            for (int idx = 0; idx < current_batch_size; idx++) {
                 if (tjDecompress2(m_jpegDecompressor[idx],
                                 reinterpret_cast<uint8_t*>(batch_images[idx].data()),
                                 batch_images[idx].size(),
@@ -220,21 +215,11 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                                 height[idx],
                                 tjpf,
                                 TJFLAG_ACCURATEDCT) != 0) {
-                    std::cerr<< "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
+                    std::cerr << "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
                 }
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             time_per_batch_in_milli_sec = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-    
-        }
-        if(hw_decode)
-        {
-            for (int b = 0; b < current_batch_size; b++) {
-                image_size_in_mpixels += (static_cast<double>(widths[b][0]) * static_cast<double>(heights[b][0]) / 1000000);
-            }
-        }
-        else
-        {
             for (int b = 0; b < current_batch_size; b++) {
                 image_size_in_mpixels += (static_cast<double>(width[b]) * static_cast<double>(height[b]) / 1000000);
             }
@@ -243,7 +228,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
         decode_info.num_decoded_images += current_batch_size;
 
         if (save_images) {
-            if(hw_decode){
+            if(hw_decode) {
                 for (int b = 0; b < current_batch_size; b++) {
                     std::string image_save_path = output_file_path;
                     //if ROI is present, need to pass roi_width and roi_height
@@ -252,9 +237,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                     rocjpeg_utils.GetOutputFileExt(decode_params.output_format, base_file_names[b], width, height, subsamplings[b], image_save_path);
                     rocjpeg_utils.SaveImage(image_save_path, &output_images[b], width, height, subsamplings[b], decode_params.output_format);
                 }
-            }
-            else
-            {
+            } else {
                 for (int b = 0; b < current_batch_size; b++) {
                     std::string image_save_path = output_file_path;
                     std::string file_extension = "rgb";
@@ -285,8 +268,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     double avg_time_per_image = decode_info.num_decoded_images > 0 ? total_decode_time_in_milli_sec / decode_info.num_decoded_images : 0;
     decode_info.images_per_sec = avg_time_per_image > 0 ? 1000 / avg_time_per_image : 0;
     decode_info.image_size_in_mpixels_per_sec = decode_info.num_decoded_images > 0 ? decode_info.images_per_sec * image_size_in_mpixels_all / decode_info.num_decoded_images : 0;
-    if(hw_decode)
-    {
+    if(hw_decode) {
         for (auto& it : output_images) {
             for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
                 if (it.channel[i] != nullptr) {
@@ -295,13 +277,9 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                 }
             }
         }
-    }
-    else
-    {
-        for(int i= 0; i<batch_size ; i++)
-        {
-            if(output_buffers[i])
-            {
+    } else {
+        for(int i= 0; i < batch_size ; i++) {
+            if(output_buffers[i]) {
                 free(output_buffers[i]);
                 output_buffers[i] = nullptr;
             }
