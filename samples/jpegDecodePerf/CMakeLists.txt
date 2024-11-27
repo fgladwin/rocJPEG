@@ -21,8 +21,8 @@
 #
 ################################################################################
 
-cmake_minimum_required (VERSION 3.0)
-project(jpegdecodemultithreads)
+cmake_minimum_required(VERSION 3.10)
+project(jpegdecodeperf)
 set(CMAKE_CXX_STANDARD 17)
 
 # ROCM Path
@@ -36,7 +36,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../../cmake)
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH}/hip ${ROCM_PATH})
-set(CMAKE_CXX_COMPILER ${ROCM_PATH}/lib/llvm/bin/clang++)
+set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
 
 find_package(HIP QUIET)
 
@@ -65,7 +65,7 @@ if(HIP_FOUND AND ROCJPEG_FOUND AND Threads_FOUND)
     # rocJPEG
     include_directories (${ROCJPEG_INCLUDE_DIR})
     set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${ROCJPEG_LIBRARY})
-    list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecodemultithreads.cpp)
+    list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecodeperf.cpp)
     add_executable(${PROJECT_NAME} ${SOURCES})
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
     target_link_libraries(${PROJECT_NAME} ${LINK_LIBRARY_LIST})
