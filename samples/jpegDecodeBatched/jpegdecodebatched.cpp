@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
                 num_channels = 3; // Temporarily assuming RGB images
                 int tjpf = TJPF_RGB;
                 for (int j = 0; j < current_batch_size; j++) {
-                    int idx = 0;
+                    int idx = j;
                     if (tjDecompress2(m_jpegDecompressor[idx],
                                     reinterpret_cast<uint8_t*>(batch_images[idx].data()),
                                     batch_images[idx].size(),
