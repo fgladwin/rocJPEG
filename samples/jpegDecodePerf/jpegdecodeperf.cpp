@@ -34,6 +34,7 @@ struct DecodeInfo {
     uint64_t num_jpegs_with_411_subsampling;
     uint64_t num_jpegs_with_unknown_subsampling;
     uint64_t num_jpegs_with_unsupported_resolution;
+    std::vector<tjhandle> m_jpegDecompressor;    // TurboJpeg handle
 };
 
 /**
@@ -73,21 +74,9 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     RocJpegChromaSubsampling temp_subsampling;
     std::string temp_base_file_name;
     
-    tjhandle m_jpegDecompressor[batch_size];
     int width[batch_size], height[batch_size], color_comps[batch_size];
-    int output_buffer_sizes[batch_size];
-    unsigned char** output_buffers = nullptr; 
-    // Allocate memory for output_buffers based on the batch size
-
-    if (!hw_decode) {
-        output_buffers = new unsigned char*[batch_size];
-        // Initialize the buffers
-        for (int i = 0; i < batch_size; ++i) {
-            m_jpegDecompressor[i] = tjInitDecompress();
-            output_buffers[i] = nullptr;
-            output_buffer_sizes[i] = 0; // Initialize size to 0
-        }
-    }
+    std::vector<int> output_buffer_sizes(batch_size, 0);
+    std::vector<unsigned char*> output_buffers(batch_size, nullptr); 
 
     for (int i = 0; i < decode_info.file_paths.size(); i += batch_size) {
         int batch_end = std::min(i + batch_size, static_cast<int>(decode_info.file_paths.size()));
@@ -165,17 +154,16 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                 heights[current_batch_size] = temp_heights;
                 base_file_names[current_batch_size] = temp_base_file_name;
             } else {
-                m_jpegDecompressor[index] = tjInitDecompress();
                 //TODO : Use the most recent TurboJpeg API tjDecompressHeader3 which returns the color components
-                if(tjDecompressHeader2(m_jpegDecompressor[index],
+                if(tjDecompressHeader2(decode_info.m_jpegDecompressor[index],
                                         reinterpret_cast<uint8_t*>(batch_images[index].data()),
                                         file_size,
                                         &width[index],
                                         &height[index],
                                         &color_comps[index]) != 0) {
                     // ignore "Could not determine Subsampling type error"
-                    if (std::string(tjGetErrorStr2(m_jpegDecompressor[index])).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
-                        std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(m_jpegDecompressor[index]));
+                    if (std::string(tjGetErrorStr2(decode_info.m_jpegDecompressor[index])).find("Could not determine subsampling type for JPEG image") == std::string::npos) {
+                        std::cerr << "Jpeg header decode failed " << std::string(tjGetErrorStr2(decode_info.m_jpegDecompressor[index]));
                         // num_jpegs_with_unknown_subsampling++;
                     }
                 }
@@ -206,7 +194,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
             int tjpf = TJPF_RGB;
             auto start_time = std::chrono::high_resolution_clock::now();
             for (int idx = 0; idx < current_batch_size; idx++) {
-                if (tjDecompress2(m_jpegDecompressor[idx],
+                if (tjDecompress2(decode_info.m_jpegDecompressor[idx],
                                 reinterpret_cast<uint8_t*>(batch_images[idx].data()),
                                 batch_images[idx].size(),
                                 output_buffers[idx],
@@ -215,7 +203,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                                 height[idx],
                                 tjpf,
                                 TJFLAG_ACCURATEDCT) != 0) {
-                    std::cerr << "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(m_jpegDecompressor));
+                    std::cerr << "KO::Jpeg image decode failed "<< std::string(tjGetErrorStr2(decode_info.m_jpegDecompressor[idx]));
                 }
             }
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -278,12 +266,11 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
             }
         }
     } else {
-        for(int i= 0; i < batch_size ; i++) {
+        for(int i = 0; i < batch_size ; i++) {
             if(output_buffers[i]) {
                 free(output_buffers[i]);
                 output_buffers[i] = nullptr;
             }
-            tjDestroy(m_jpegDecompressor[i]);
         }
     }
 }
@@ -323,14 +310,17 @@ int main(int argc, char **argv) {
     decode_info_per_thread.resize(num_threads);
 
     for (int i = 0; i < num_threads; i++) {
-        if(hw_decode)
+        if(hw_decode) {
             CHECK_ROCJPEG(rocJpegCreate(rocjpeg_backend, device_id, &decode_info_per_thread[i].rocjpeg_handle));
-        decode_info_per_thread[i].rocjpeg_stream_handles.resize(batch_size);
-        if(hw_decode)
-        {
+            decode_info_per_thread[i].rocjpeg_stream_handles.resize(batch_size);
             for (auto j = 0; j < batch_size; j++) {
                 CHECK_ROCJPEG(rocJpegStreamCreate(&decode_info_per_thread[i].rocjpeg_stream_handles[j]));
             }
+        } else {
+            decode_info_per_thread[i].m_jpegDecompressor.resize(batch_size);
+            for (auto j = 0; j < batch_size; j++) {
+                decode_info_per_thread[i].m_jpegDecompressor[j] = tjInitDecompress();
+            } 
         }
         decode_info_per_thread[i].num_decoded_images = 0;
         decode_info_per_thread[i].images_per_sec = 0;
@@ -400,12 +390,17 @@ int main(int argc, char **argv) {
         std::cout << "Average decoded images size (Mpixels/Sec): " << total_image_size_in_mpixels_per_sec << std::endl;
     }
 
-    if(hw_decode)
-    {
+    if(hw_decode) {
         for (int i = 0; i < num_threads; i++) {
             CHECK_ROCJPEG(rocJpegDestroy(decode_info_per_thread[i].rocjpeg_handle));
             for (auto j = 0; j < batch_size; j++) {
                 CHECK_ROCJPEG(rocJpegStreamDestroy(decode_info_per_thread[i].rocjpeg_stream_handles[j]));
+            }
+        }
+    } else {
+        for (int i = 0; i < num_threads; i++) {
+            for (auto j = 0; j < batch_size; j++) {
+                tjDestroy(decode_info_per_thread[i].m_jpegDecompressor[j]);
             }
         }
     }
