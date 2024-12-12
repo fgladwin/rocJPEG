@@ -48,9 +48,6 @@ THE SOFTWARE.
 #include "rocjpeg_parser.h"
 #include "../api/rocjpeg.h"
 
-/*Note: va.h doesn't have VA_FOURCC_YUYV defined but vaExportSurfaceHandle returns 0x56595559 for packed YUYV for YUV 4:2:2*/
-#define ROCJPEG_FOURCC_YUYV 0x56595559
-
 /**
  * @brief Enumeration representing the compute partition for the MI300+ family of GPUs.
  */
@@ -344,9 +341,9 @@ private:
     uint32_t min_picture_height_; // The minimum height of the picture
     uint32_t max_picture_width_; // The maximum width of the picture
     uint32_t max_picture_height_; // The maximum height of the picture
+    bool supports_modifiers_; // DRM format modifiers support
     VADisplay va_display_; // The VAAPI display
     VAContextID va_context_id_; // The VAAPI context ID
-    VASurfaceID va_surface_id_; // The VAAPI surface IDs
     std::vector<VAConfigAttrib> va_config_attrib_; // The VAAPI configuration attributes
     VAConfigID va_config_id_; // The VAAPI configuration ID
     VAProfile va_profile_; // The VAAPI profile
