@@ -1,5 +1,5 @@
 # ##############################################################################
-# Copyright (c) 2024 Advanced Micro Devices, Inc.
+# Copyright (c) 2024 - 2025 Advanced Micro Devices, Inc.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -34,11 +34,13 @@ endif()
 
 # Set AMD Clang as default compiler
 if (NOT DEFINED CMAKE_CXX_COMPILER)
+  set(CMAKE_C_COMPILER ${ROCM_PATH}/bin/amdclang)
   set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
 endif()
 
-set(VERSION "0.7.0")
+set(VERSION "0.8.0")
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED On)
 
 # Set Project Version and Language
 project(rocjpeg VERSION ${VERSION} LANGUAGES CXX)
@@ -93,7 +95,7 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
   # -O0 -- Don't Optimize output file 
   # -g  -- generate debugging information, generate debugging information, dwarf-4 for making valgrind work
   # -Og -- Optimize for debugging experience rather than speed or size
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -gdwarf-4 -Og")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -gdwarf-4")
 else()
   # -O3       -- Optimize output file 
   # -DNDEBUG  -- turn off asserts 
@@ -103,7 +105,7 @@ endif()
 message("-- ${BoldBlue}rocJPEG Build Type -- ${CMAKE_BUILD_TYPE}${ColourReset}")
 
 # Set supported GPU Targets
-set(DEFAULT_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201")
+set(DEFAULT_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201")
 
 # Set AMD GPU_TARGETS
 if((AMDGPU_TARGETS OR DEFINED ENV{AMDGPU_TARGETS}) AND (NOT GPU_TARGETS))
@@ -143,11 +145,6 @@ if(HIP_FOUND AND Libva_FOUND)
   include_directories(${LIBVA_INCLUDE_DIR})
   set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${LIBVA_LIBRARY})
   set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${LIBVA_DRM_LIBRARY})
-
-  #filesystem: c++ compilers less than equal to 8.5 need explicit link with stdc++fs
-  if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS_EQUAL "8.5")
-    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} stdc++fs)
-  endif()
 
   # rocprofiler
   if(rocprofiler-register_FOUND)
@@ -203,8 +200,6 @@ if(HIP_FOUND AND Libva_FOUND)
   set(CPACK_RESOURCE_FILE_LICENSE  "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
   install(FILES ${CPACK_RESOURCE_FILE_LICENSE} DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT runtime)
   install(FILES ${CPACK_RESOURCE_FILE_LICENSE} DESTINATION ${CMAKE_INSTALL_DOCDIR}-asan COMPONENT asan)
-  install(FILES ${CPACK_RESOURCE_FILE_LICENSE} DESTINATION ${CMAKE_INSTALL_DOCDIR}-dev COMPONENT dev)
-  install(FILES ${CPACK_RESOURCE_FILE_LICENSE} DESTINATION ${CMAKE_INSTALL_DOCDIR}-test COMPONENT test)
   # install test cmake
   install(FILES test/CMakeLists.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/test COMPONENT test)
 
@@ -214,7 +209,7 @@ if(HIP_FOUND AND Libva_FOUND)
   # make test with CTest
   enable_testing()
   include(CTest)
-  add_subdirectory(samples)
+  add_subdirectory(test)
 
   # set package information
   set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
@@ -360,7 +355,7 @@ rocJPEG runtime package provides rocJPEG library and license.txt")
   cpack_add_component(dev
                     DISPLAY_NAME "rocJPEG Develop Package"
                     DESCRIPTION "AMD rocJPEG is a high performance JPEG decode SDK for AMD GPUs. \
-rocJPEG develop package provides rocJPEG library, header files, samples, and license.txt")
+rocJPEG develop package provides rocJPEG library, header files and samples")
 
   cpack_add_component(asan
                     DISPLAY_NAME "rocJPEG ASAN Package"

@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (c) 2024 Advanced Micro Devices, Inc.
+# Copyright (c) 2024 - 2025 Advanced Micro Devices, Inc.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,8 +22,6 @@
 ################################################################################
 
 cmake_minimum_required (VERSION 3.10)
-project(jpegdecode)
-set(CMAKE_CXX_STANDARD 17)
 
 # ROCM Path
 if(DEFINED ENV{ROCM_PATH})
@@ -33,21 +31,22 @@ elseif(ROCM_PATH)
 else()
   set(ROCM_PATH /opt/rocm CACHE PATH "Default ROCm installation path")
 endif()
+# Set AMD Clang as default compiler
+if (NOT DEFINED CMAKE_CXX_COMPILER)
+  set(CMAKE_C_COMPILER ${ROCM_PATH}/bin/amdclang)
+  set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
+endif()
+
+project(jpegdecode)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED On)
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../../cmake)
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH}/hip ${ROCM_PATH})
-set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
 
 find_package(HIP QUIET)
-
-# find rocJPEG
-find_library(ROCJPEG_LIBRARY NAMES rocjpeg HINTS {ROCM_PATH}/lib)
-find_path(ROCJPEG_INCLUDE_DIR NAMES rocjpeg.h PATHS /opt/rocm/include/rocjpeg {ROCM_PATH}/include/rocjpeg)
-
-if(ROCJPEG_LIBRARY AND ROCJPEG_INCLUDE_DIR)
-    set(ROCJPEG_FOUND TRUE)
-    message("-- ${White}Using rocJPEG -- \n\tLibraries:${ROCJPEG_LIBRARY} \n\tIncludes:${ROCJPEG_INCLUDE_DIR}${ColourReset}")
-endif()
+find_package(rocJPEG QUIET)
+find_package(rocprofiler-register QUIET)
 
 # find TurboJpeg
 find_library(TurboJpeg_LIBRARIES NAMES libturbojpeg.so PATHS /usr/lib ${TURBO_JPEG_PATH}/lib ${TURBO_JPEG_PATH}/lib64 /opt/libjpeg-turbo/lib)
@@ -63,22 +62,6 @@ if(TurboJpeg_LIBRARIES AND TurboJpeg_INCLUDE_DIRS AND LIBJPEG_LIBRARIES AND LIBJ
     message("-- ${White}Using TurboJpeg -- \n\tLibraries:${TurboJpeg_LIBRARIES} \n\tIncludes:${TurboJpeg_INCLUDE_DIRS}${ColourReset}")
 endif()
 
-if(HIP_FOUND AND ROCJPEG_FOUND)
-    # HIP
-    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} hip::host)
-    # rocJPEG
-    include_directories (${ROCJPEG_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
-    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${ROCJPEG_LIBRARY})
-else()
-    message("-- ERROR!: ${PROJECT_NAME} excluded! please install all the dependencies and try again!")
-    if (NOT HIP_FOUND)
-        message(FATAL_ERROR "-- ERROR!: HIP Not Found! - please install ROCm and HIP!")
-    endif()
-    if (NOT ROCJPEG_FOUND)
-        message(FATAL_ERROR "-- ERROR!: rocJPEG Not Found! - please install rocJPEG!")
-    endif()
-endif()
-
 if(TURBOJPEG_FOUND)
     # TurboJpeg
     include_directories (${TurboJpeg_INCLUDE_DIRS} ${LIBJPEG_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -90,12 +73,30 @@ else()
     endif()
 endif()
 
-#filesystem: c++ compilers less than equal to 8.5 need explicit link with stdc++fs
-if (CMAKE_CXX_COMPILER_VERSION VERSION_LESS_EQUAL "8.5")
-  set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} stdc++fs)
-endif()
+if(HIP_FOUND AND ROCJPEG_FOUND AND rocprofiler-register_FOUND)
+    # HIP
+    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} hip::host)
+    # rocJPEG
+    include_directories (${ROCJPEG_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} ${ROCJPEG_LIBRARY})
+    # std filesystem
+    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} stdc++fs)
+    # rocprofiler-register
+    set(LINK_LIBRARY_LIST ${LINK_LIBRARY_LIST} rocprofiler-register::rocprofiler-register)
 
-list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecode.cpp)
-add_executable(${PROJECT_NAME} ${SOURCES})
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
-target_link_libraries(${PROJECT_NAME} ${LINK_LIBRARY_LIST})
+    list(APPEND SOURCES ${PROJECT_SOURCE_DIR} jpegdecode.cpp)
+    add_executable(${PROJECT_NAME} ${SOURCES})
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++17")
+    target_link_libraries(${PROJECT_NAME} ${LINK_LIBRARY_LIST})
+else()
+    message("-- ERROR!: ${PROJECT_NAME} excluded! please install all the dependencies and try again!")
+    if (NOT HIP_FOUND)
+        message(FATAL_ERROR "-- ERROR!: HIP Not Found! - please install ROCm and HIP!")
+    endif()
+    if (NOT ROCJPEG_FOUND)
+        message(FATAL_ERROR "-- ERROR!: rocJPEG Not Found! - please install rocJPEG!")
+    endif()
+    if (NOT rocprofiler-register_FOUND)
+        message(FATAL_ERROR "-- ERROR!: rocprofiler-register Not Found! - please install rocprofiler-register!")
+    endif()
+endif()

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 - 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -47,7 +47,7 @@ struct DecodeInfo {
  * @param output_file_path The file path where the decoded images will be saved.
  * @param batch_size The number of images to be processed in each batch.
  */
-void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDecodeParams &decode_params, bool save_images, std::string &output_file_path, int batch_size, int hw_decode) {
+void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDecodeParams &decode_params, bool save_images, std::string &output_file_path, int batch_size, int device_id) {
 
     bool is_roi_valid = false;
     uint32_t roi_width;
@@ -78,6 +78,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     std::vector<int> output_buffer_sizes(batch_size, 0);
     std::vector<unsigned char*> output_buffers(batch_size, nullptr); 
 
+    CHECK_HIP(hipSetDevice(device_id));
     for (int i = 0; i < decode_info.file_paths.size(); i += batch_size) {
         int batch_end = std::min(i + batch_size, static_cast<int>(decode_info.file_paths.size()));
         for (int j = i; j < batch_end; j++) {
@@ -102,7 +103,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
                 return;
             }
 
-            if(hw_decode) {
+            if(device_id >= 0) {
                 RocJpegStatus rocjpeg_status = rocJpegStreamParse(reinterpret_cast<uint8_t*>(batch_images[index].data()), file_size, decode_info.rocjpeg_stream_handles[index]);
                 if (rocjpeg_status != ROCJPEG_STATUS_SUCCESS) {
                     decode_info.num_bad_jpegs++;
@@ -179,7 +180,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
 
         double time_per_batch_in_milli_sec = 0;
         double image_size_in_mpixels = 0;
-        if(hw_decode) {
+        if(device_id >= 0) {
             if (current_batch_size > 0) {
                 auto start_time = std::chrono::high_resolution_clock::now();
                 CHECK_ROCJPEG(rocJpegDecodeBatched(decode_info.rocjpeg_handle, rocjpeg_stream_handles.data(), current_batch_size, &decode_params, output_images.data()));
@@ -216,7 +217,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
         decode_info.num_decoded_images += current_batch_size;
 
         if (save_images) {
-            if(hw_decode) {
+            if(device_id >= 0) {
                 for (int b = 0; b < current_batch_size; b++) {
                     std::string image_save_path = output_file_path;
                     //if ROI is present, need to pass roi_width and roi_height
@@ -256,7 +257,7 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     double avg_time_per_image = decode_info.num_decoded_images > 0 ? total_decode_time_in_milli_sec / decode_info.num_decoded_images : 0;
     decode_info.images_per_sec = avg_time_per_image > 0 ? 1000 / avg_time_per_image : 0;
     decode_info.image_size_in_mpixels_per_sec = decode_info.num_decoded_images > 0 ? decode_info.images_per_sec * image_size_in_mpixels_all / decode_info.num_decoded_images : 0;
-    if(hw_decode) {
+    if(device_id >= 0) {
         for (auto& it : output_images) {
             for (int i = 0; i < ROCJPEG_MAX_COMPONENT; i++) {
                 if (it.channel[i] != nullptr) {
@@ -295,12 +296,13 @@ int main(int argc, char **argv) {
         std::cerr << "ERROR: Failed to get input file paths!" << std::endl;
         return EXIT_FAILURE;
     }
-    if(hw_decode)
-    {
+    if(hw_decode) {
         if (!RocJpegUtils::InitHipDevice(device_id)) {
             std::cerr << "ERROR: Failed to initialize HIP!" << std::endl;
             return EXIT_FAILURE;
         }
+    } else {
+        device_id = -1;
     }
 
     if (num_threads > file_paths.size()) {
@@ -344,7 +346,7 @@ int main(int argc, char **argv) {
 
     std::cout << "Decoding started with " << num_threads << " threads, please wait!" << std::endl;
     for (int i = 0; i < num_threads; ++i) {
-        thread_pool.ExecuteJob(std::bind(DecodeImages, std::ref(decode_info_per_thread[i]), rocjpeg_utils, std::ref(decode_params), save_images, std::ref(output_file_path), batch_size, hw_decode));
+        thread_pool.ExecuteJob(std::bind(DecodeImages, std::ref(decode_info_per_thread[i]), rocjpeg_utils, std::ref(decode_params), save_images, std::ref(output_file_path), batch_size, device_id));
     }
     thread_pool.JoinThreads();
 

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 - 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -31,16 +31,13 @@ THE SOFTWARE.
 #include <string>
 #include <fcntl.h>
 #include <unistd.h>
-#if __cplusplus >= 201703L && __has_include(<filesystem>)
-    #include <filesystem>
-    namespace fs = std::filesystem;
-#else
-    #include <experimental/filesystem>
-    namespace fs = std::experimental::filesystem;
-#endif
+#include <dirent.h>
+#include <sys/stat.h>
 #include <unordered_map>
 #include <memory>
 #include <functional>
+#include <libdrm/amdgpu.h>
+#include <libdrm/amdgpu_drm.h>
 #include <va/va.h>
 #include <va/va_drm.h>
 #include <va/va_drmcommon.h>
@@ -282,9 +279,10 @@ public:
      * @param device_name The name of the device.
      * @param gcn_arch_name The name of the GCN architecture.
      * @param device_id The ID of the device.
+     * @param gpu_uuid The UUID of the GPU.
      * @return The status of the initialization.
      */
-    RocJpegStatus InitializeDecoder(std::string device_name, std::string gcn_arch_name, int device_id);
+    RocJpegStatus InitializeDecoder(std::string device_name, std::string gcn_arch_name, int device_id, std::string& gpu_uuid);
 
     /**
      * @brief Submits a JPEG stream for decoding.
@@ -347,7 +345,6 @@ private:
     std::vector<VAConfigAttrib> va_config_attrib_; // The VAAPI configuration attributes
     VAConfigID va_config_id_; // The VAAPI configuration ID
     VAProfile va_profile_; // The VAAPI profile
-    std::unordered_map<std::string, VcnJpegSpec> vcn_jpeg_spec_; // The map of VCN JPEG specifications
     std::unique_ptr<RocJpegVaapiMemoryPool> vaapi_mem_pool_; // The VAAPI memory pool
     VcnJpegSpec current_vcn_jpeg_spec_; // The current VCN JPEG specification
     VABufferID va_picture_parameter_buf_id_; // The VAAPI picture parameter buffer ID
@@ -355,7 +352,23 @@ private:
     VABufferID va_huffmantable_buf_id_; // The VAAPI Huffman table buffer ID
     VABufferID va_slice_param_buf_id_; // The VAAPI slice parameter buffer ID
     VABufferID va_slice_data_buf_id_; // The VAAPI slice data buffer ID
+    /**
+     * @brief A map that associates GPU UUIDs with their corresponding render node indices.
+     * 
+     * This unordered map uses GPU UUIDs as keys (std::string) and maps them to their 
+     * respective render node indices (int). It provides a fast lookup mechanism to 
+     * retrieve the render node index for a given GPU UUID.
+     */
+    std::unordered_map<std::string, int> gpu_uuids_to_render_nodes_map_;
 
+    /**
+     * @brief A map that associates GPU UUIDs with their corresponding compute partitions.
+     *
+     * This unordered map uses GPU UUIDs as keys (represented as strings) and maps them to
+     * ComputePartition objects. It allows for efficient lookup and management of compute
+     * partitions based on the unique identifiers of GPUs.
+     */
+    std::unordered_map<std::string, ComputePartition> gpu_uuids_to_compute_partition_map_;
     /**
      * @brief Initializes the VAAPI with the specified DRM node.
      * @param drm_node The DRM node to use for VAAPI initialization.
@@ -392,22 +405,28 @@ private:
     void GetVisibleDevices(std::vector<int>& visible_devices);
 
     /**
-     * @brief Retrieves the current compute partitions.
-     * @param current_compute_partitions The vector to store the current compute partitions.
-     */
-    void GetCurrentComputePartition(std::vector<ComputePartition> &currnet_compute_partitions);
-
-    /**
      * @brief Retrieves the DRM node offset.
      * @param device_name The name of the device.
      * @param device_id The ID of the device.
      * @param visible_devices The vector of visible devices.
-     * @param current_compute_partitions The vector of current compute partitions.
+     * @param current_compute_partition The current compute partition.
      * @param offset The offset of the DRM node.
      */
     void GetDrmNodeOffset(std::string device_name, uint8_t device_id, std::vector<int>& visible_devices,
-                                    std::vector<ComputePartition> &current_compute_partitions,
+                                    ComputePartition current_compute_partitions,
                                     int &offset);
+    /**
+     * @brief Retrieves GPU UUIDs and maps them to render node IDs.
+    */
+    void GetGpuUuids();
+
+    /**
+     * @brief Retrieves the number of JPEG cores available.
+     *
+     * This function is used to determine the number of JPEG decoding cores
+     * that are available for use.
+     */
+    void GetNumJpegCores();
 };
 
 #endif // ROC_JPEG_VAAPI_DECODER_H_

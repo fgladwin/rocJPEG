@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 - 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -295,20 +295,7 @@ bool RocJpegVaapiMemoryPool::SetSurfaceAsIdle(VASurfaceID surface_id) {
 RocJpegVappiDecoder::RocJpegVappiDecoder(int device_id) : device_id_{device_id}, drm_fd_{-1}, min_picture_width_{64}, min_picture_height_{64},
     max_picture_width_{4096}, max_picture_height_{4096}, supports_modifiers_{false}, va_display_{0}, va_config_attrib_{{}}, va_config_id_{0}, va_profile_{VAProfileJPEGBaseline},
     vaapi_mem_pool_(std::make_unique<RocJpegVaapiMemoryPool>()), current_vcn_jpeg_spec_{0}, va_picture_parameter_buf_id_{0}, va_quantization_matrix_buf_id_{0}, va_huffmantable_buf_id_{0},
-    va_slice_param_buf_id_{0}, va_slice_data_buf_id_{0} {
-        vcn_jpeg_spec_ = {{"gfx908", {2, false, false}},
-                          {"gfx90a", {2, false, false}},
-                          {"gfx942_mi300a", {24, true, true}},
-                          {"gfx942_mi300x", {32, true, true}},
-                          {"gfx1030", {1, false, false}},
-                          {"gfx1031", {1, false, false}},
-                          {"gfx1032", {1, false, false}},
-                          {"gfx1100", {1, false, false}},
-                          {"gfx1101", {1, false, false}},
-                          {"gfx1102", {1, false, false}},
-                          {"gfx1200", {1, false, false}},
-                          {"gfx1201", {1, false, false}}};
-};
+    va_slice_param_buf_id_{0}, va_slice_data_buf_id_{0} {};
 
 /**
  * @brief Destructor for the RocJpegVappiDecoder class.
@@ -359,67 +346,63 @@ RocJpegVappiDecoder::~RocJpegVappiDecoder() {
  * @param device_name The name of the device.
  * @param gcn_arch_name The name of the GCN architecture.
  * @param device_id The ID of the device.
+ * @param gpu_uuid The UUID of the GPU.
  * @return The status of the initialization process.
  */
-RocJpegStatus RocJpegVappiDecoder::InitializeDecoder(std::string device_name, std::string gcn_arch_name, int device_id) {
+RocJpegStatus RocJpegVappiDecoder::InitializeDecoder(std::string device_name, std::string gcn_arch_name, int device_id, std::string& gpu_uuid) {
     device_id_ = device_id;
-    std::size_t pos = gcn_arch_name.find_first_of(":");
-    std::string gcn_arch_name_base = (pos != std::string::npos) ? gcn_arch_name.substr(0, pos) : gcn_arch_name;
-
-    std::string gcn_arch_name_base_temp = gcn_arch_name_base;
-    // Check if the device name contains "MI300A" to identify if it is MI300A or MI300X ASIC
-    // as both have the same gfx942 architecture name.
-    bool is_gfx942_detected = (gcn_arch_name_base.compare("gfx942") == 0);
-    if (is_gfx942_detected) {
-        std::string mi300a = "MI300A";
-        size_t found_mi300a = device_name.find(mi300a);
-        gcn_arch_name_base_temp = (found_mi300a != std::string::npos) ? gcn_arch_name_base_temp + "_mi300a"
-                                                                      : gcn_arch_name_base_temp + "_mi300x";
-    }
-
     std::vector<int> visible_devices;
     GetVisibleDevices(visible_devices);
+    GetGpuUuids();
 
     int offset = 0;
-    if (gcn_arch_name_base.compare("gfx942") == 0) {
-            std::vector<ComputePartition> current_compute_partitions;
-            GetCurrentComputePartition(current_compute_partitions);
-            if (current_compute_partitions.empty()) {
-                //if the current_compute_partitions is empty then the default SPX mode is assumed.
-                if (device_id_ < visible_devices.size()) {
-                    offset = visible_devices[device_id_] * 7;
-                } else {
-                    offset = device_id_ * 7;
-                }
-            } else {
-                GetDrmNodeOffset(device_name, device_id_, visible_devices, current_compute_partitions, offset);
-            }
-    }
+    ComputePartition current_compute_partition = (gpu_uuids_to_compute_partition_map_.find(gpu_uuid) != gpu_uuids_to_compute_partition_map_.end()) ? gpu_uuids_to_compute_partition_map_[gpu_uuid] : kSpx;
+    GetDrmNodeOffset(device_name, device_id_, visible_devices, current_compute_partition, offset);
 
     std::string drm_node = "/dev/dri/renderD";
-    if (device_id_ < visible_devices.size()) {
-        drm_node += std::to_string(128 + offset + visible_devices[device_id_]);
-    } else {
-        drm_node += std::to_string(128 + offset + device_id_);
-    }
+    int render_node_id = (gpu_uuids_to_render_nodes_map_.find(gpu_uuid) != gpu_uuids_to_render_nodes_map_.end()) ? gpu_uuids_to_render_nodes_map_[gpu_uuid] : 128;
+    drm_node += std::to_string(render_node_id + offset);
+
     CHECK_ROCJPEG(InitVAAPI(drm_node));
     CHECK_ROCJPEG(CreateDecoderConfig());
     CHECK_ROCJPEG(CreateDecoderContext());
 
     vaapi_mem_pool_->SetVaapiDisplay(va_display_);
 
-    auto it = vcn_jpeg_spec_.find(gcn_arch_name_base_temp);
-    if (it != vcn_jpeg_spec_.end()) {
-        current_vcn_jpeg_spec_ = it->second;
-    } else {
-        INFO("WARNING: didn't find the vcn jpeg spec for " + gcn_arch_name_base_temp + " using the default setting");
-        current_vcn_jpeg_spec_.num_jpeg_cores = 1;
-    }
+    GetNumJpegCores();
     vaapi_mem_pool_->SetPoolSize(current_vcn_jpeg_spec_.num_jpeg_cores + 1);
 
     return ROCJPEG_STATUS_SUCCESS;
 }
-
+/**
+ * @brief Retrieves the number of JPEG cores available on the AMD GPU and updates the decoder's capabilities.
+ *
+ * This function initializes the AMD GPU device, queries the number of JPEG cores available, and updates
+ * the current VCN JPEG specifications based on the number of cores. If the number of JPEG cores is 8 or more,
+ * it sets the capabilities to support ROI decode and conversion to RGB.
+ *
+ * @note If the initialization of the AMD GPU device fails or querying the number of JPEG cores fails,
+ *       appropriate error messages are logged.
+ */
+void RocJpegVappiDecoder::GetNumJpegCores() {
+    amdgpu_device_handle dev_handle;
+    uint32_t major_version = 0, minor_version = 0;
+    uint32_t num_jpeg_cores = 0;
+    int error_code = 0;
+    if (amdgpu_device_initialize(drm_fd_, &major_version, &minor_version, &dev_handle)) {
+        ERR("amdgpu_device_initialize failed!");
+        return;
+    }
+    error_code = amdgpu_query_hw_ip_count(dev_handle, AMDGPU_HW_IP_VCN_JPEG, &num_jpeg_cores);
+    if (!error_code) {
+        current_vcn_jpeg_spec_.num_jpeg_cores = num_jpeg_cores;
+        // Set the capabilities based on the number of JPEG cores
+        current_vcn_jpeg_spec_.can_roi_decode = current_vcn_jpeg_spec_.can_convert_to_rgb = (num_jpeg_cores >= 8);
+    } else {
+        ERR("Failed to get the number of jpeg cores.");
+    }
+    amdgpu_device_deinitialize(dev_handle);
+}
 /**
  * @brief Initializes the VAAPI decoder.
  *
@@ -913,7 +896,12 @@ RocJpegStatus RocJpegVappiDecoder::GetHipInteropMem(VASurfaceID surface_id, HipI
  * @param visible_devices_vector The vector to store the visible devices.
  */
 void RocJpegVappiDecoder::GetVisibleDevices(std::vector<int>& visible_devices_vetor) {
-    char *visible_devices = std::getenv("HIP_VISIBLE_DEVICES");
+    // First, check if the ROCR_VISIBLE_DEVICES environment variable is present
+    char *visible_devices = std::getenv("ROCR_VISIBLE_DEVICES");
+    // If ROCR_VISIBLE_DEVICES is not present, check if HIP_VISIBLE_DEVICES is present
+    if (visible_devices == nullptr) {
+        visible_devices = std::getenv("HIP_VISIBLE_DEVICES");
+    }
     if (visible_devices != nullptr) {
         char *token = std::strtok(visible_devices,",");
         while (token != nullptr) {
@@ -925,111 +913,63 @@ void RocJpegVappiDecoder::GetVisibleDevices(std::vector<int>& visible_devices_ve
 }
 
 /**
- * Retrieves the current compute partitions from the system.
- *
- * This function searches for the "current_compute_partition" file in the "/sys/devices/" directory
- * and reads the partition value from each file found. The partition value is then compared to known
- * partition names and the corresponding ComputePartition enum value is added to the provided vector.
- *
- * @param current_compute_partitions A vector to store the current compute partitions.
- */
-void RocJpegVappiDecoder::GetCurrentComputePartition(std::vector<ComputePartition> &current_compute_partitions) {
-    std::string search_path = "/sys/devices/";
-    std::string partition_file = "current_compute_partition";
-    std::error_code ec;
-    if (fs::exists(search_path)) {
-        for (auto it = fs::recursive_directory_iterator(search_path, fs::directory_options::skip_permission_denied); it != fs::recursive_directory_iterator(); ) {
-            try {
-                if (it->path().filename() == partition_file) {
-                    std::ifstream file(it->path());
-                    if (file.is_open()) {
-                        std::string partition;
-                        std::getline(file, partition);
-                        if (partition.compare("SPX") == 0 || partition.compare("spx") == 0) {
-                            current_compute_partitions.push_back(kSpx);
-                        } else if (partition.compare("DPX") == 0 || partition.compare("dpx") == 0) {
-                            current_compute_partitions.push_back(kDpx);
-                        } else if (partition.compare("TPX") == 0 || partition.compare("tpx") == 0) {
-                            current_compute_partitions.push_back(kTpx);
-                        } else if (partition.compare("QPX") == 0 || partition.compare("qpx") == 0) {
-                            current_compute_partitions.push_back(kQpx);
-                        } else if (partition.compare("CPX") == 0 || partition.compare("cpx") == 0) {
-                            current_compute_partitions.push_back(kCpx);
-                        }
-                        file.close();
-                    }
-                }
-                ++it;
-            } catch (fs::filesystem_error& e) {
-                it.increment(ec);
-            }
-        }
-    }
-}
-
-/**
  * @brief Calculates the offset for the DRM node based on the device name, device ID, visible devices,
  *        current compute partitions, and the selected compute partition.
  *
  * @param device_name The name of the device.
  * @param device_id The ID of the device.
  * @param visible_devices A vector containing the IDs of the visible devices.
- * @param current_compute_partitions A vector containing the current compute partitions.
+ * @param current_compute_partition the current compute partition.
  * @param offset The calculated offset for the DRM node.
  */
 void RocJpegVappiDecoder::GetDrmNodeOffset(std::string device_name, uint8_t device_id, std::vector<int>& visible_devices,
-                                                   std::vector<ComputePartition> &current_compute_partitions,
+                                                   ComputePartition current_compute_partition,
                                                    int &offset) {
-    if (!current_compute_partitions.empty()) {
-        switch (current_compute_partitions[0]) {
-            case kSpx:
+    switch (current_compute_partition) {
+        case kSpx:
+            offset = 0;
+            break;
+        case kDpx:
+            if (device_id < visible_devices.size()) {
+                offset = (visible_devices[device_id] % 2);
+            } else {
+                offset = (device_id % 2);
+            }
+            break;
+        case kTpx:
+            if (device_id < visible_devices.size()) {
+                offset = (visible_devices[device_id] % 3);
+            } else {
+                offset = (device_id % 3);
+            }
+            break;
+        case kQpx:
+            if (device_id < visible_devices.size()) {
+                offset = (visible_devices[device_id] % 4);
+            } else {
+                offset = (device_id % 4);
+            }
+            break;
+        case kCpx:
+            // Note: The MI300 series share the same gfx_arch_name (gfx942).
+            // Therefore, we cannot use gfx942 to distinguish between MI300X, MI300A etc.
+            // Instead, use the device name to identify MI300A, etc.
+            std::string mi300a = "MI300A";
+            size_t found_mi300a = device_name.find(mi300a);
+            if (found_mi300a != std::string::npos) {
                 if (device_id < visible_devices.size()) {
-                    offset = visible_devices[device_id] * 7;
+                    offset = (visible_devices[device_id] % 6);
                 } else {
-                    offset = device_id * 7;
+                    offset = (device_id % 6);
                 }
-                break;
-            case kDpx:
+            } else {
                 if (device_id < visible_devices.size()) {
-                    offset = (visible_devices[device_id] / 2) * 6;
+                    offset = (visible_devices[device_id] % 8);
                 } else {
-                    offset = (device_id / 2) * 6;
+                    offset = (device_id % 8);
                 }
-                break;
-            case kTpx:
-                // Please note that although there are only 6 XCCs per socket on MI300A,
-                // there are two dummy render nodes added by the driver.
-                // This needs to be taken into account when creating drm_node on each socket in TPX mode.
-                if (device_id < visible_devices.size()) {
-                    offset = (visible_devices[device_id] / 3) * 5;
-                } else {
-                    offset = (device_id / 3) * 5;
-                }
-                break;
-            case kQpx:
-                if (device_id < visible_devices.size()) {
-                    offset = (visible_devices[device_id] / 4) * 4;
-                } else {
-                    offset = (device_id / 4) * 4;
-                }
-                break;
-            case kCpx:
-                // Please note that both MI300A and MI300X have the same gfx_arch_name which is
-                // gfx942. Therefore we cannot use the gfx942 to identify MI300A.
-                // instead use the device name and look for MI300A
-                // Also, as explained aboe in the TPX mode section, we need to be taken into account
-                // the extra two dummy nodes when creating drm_node on each socket in CPX mode as well.
-                std::string mi300a = "MI300A";
-                size_t found_mi300a = device_name.find(mi300a);
-                if (found_mi300a != std::string::npos) {
-                    if (device_id < visible_devices.size()) {
-                        offset = (visible_devices[device_id] / 6) * 2;
-                    } else {
-                        offset = (device_id / 6) * 2;
-                    }
-                }
-                break;
-        }
+            }
+            break;
     }
 }
 
@@ -1048,4 +988,69 @@ RocJpegStatus RocJpegVappiDecoder::SetSurfaceAsIdle(VASurfaceID surface_id) {
         return ROCJPEG_STATUS_INVALID_PARAMETER;
     }
     return ROCJPEG_STATUS_SUCCESS;
+}
+
+/**
+ * @brief Retrieves GPU UUIDs and maps them to render node IDs and compute partitions.
+ *
+ * This function iterates through all render nodes in the /dev/dri directory,
+ * extracts the render node ID from the filename, and then reads the unique GPU
+ * UUID from the corresponding sysfs path. It maps each unique GPU UUID to its
+ * corresponding render node ID and stores this mapping in the gpu_uuids_to_render_nodes_map_.
+ * Additionally, it maps the unique GPU UUID to the current compute partition if available.
+ */
+void RocJpegVappiDecoder::GetGpuUuids() {
+    std::string dri_path = "/dev/dri";
+    DIR* dir = opendir(dri_path.c_str());
+    if (dir) {
+        struct dirent* entry;
+        // Iterate through all render nodes
+        while ((entry = readdir(dir)) != nullptr) {
+            std::string filename = entry->d_name;
+            // Check if the file name starts with "renderD"
+            if (filename.find("renderD") == 0) {
+                // Extract the integer part from the render node name (e.g., 128 from renderD128)
+                int render_id = std::stoi(filename.substr(7));
+                std::string sys_device_path = "/sys/class/drm/" + filename + "/device";
+                struct stat info;
+                if (stat(sys_device_path.c_str(), &info) == 0) {
+                    std::string unique_id_path = sys_device_path + "/unique_id";
+                    std::ifstream unique_id_file(unique_id_path);
+                    std::string unique_id;
+                    if (unique_id_file.is_open() && std::getline(unique_id_file, unique_id)) {
+                        if (!unique_id.empty()) {
+                            // Map the unique GPU UUID to the render node ID
+                            gpu_uuids_to_render_nodes_map_[unique_id] = render_id;
+                        }
+                    }
+                    unique_id_file.close();
+                    if (!unique_id.empty()) {
+                        unique_id_path = sys_device_path + "/current_compute_partition";
+                        std::ifstream partition_file(unique_id_path);
+                        std::string partition;
+                        ComputePartition current_compute_partition = kSpx;
+                        if (partition_file.is_open() && std::getline(partition_file, partition)) {
+                            if (!partition.empty()) {
+                                if (partition.compare("SPX") == 0 || partition.compare("spx") == 0) {
+                                    current_compute_partition = kSpx;
+                                } else if (partition.compare("DPX") == 0 || partition.compare("dpx") == 0) {
+                                    current_compute_partition = kDpx;
+                                } else if (partition.compare("TPX") == 0 || partition.compare("tpx") == 0) {
+                                    current_compute_partition = kTpx;
+                                } else if (partition.compare("QPX") == 0 || partition.compare("qpx") == 0) {
+                                    current_compute_partition = kQpx;
+                                } else if (partition.compare("CPX") == 0 || partition.compare("cpx") == 0) {
+                                    current_compute_partition = kCpx;
+                                }
+                                // Map the unique GPU UUID to the compute partition
+                                gpu_uuids_to_compute_partition_map_[unique_id] = current_compute_partition;
+                            }
+                        }
+                        partition_file.close();
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
 }
