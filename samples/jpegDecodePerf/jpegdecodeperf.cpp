@@ -77,8 +77,8 @@ void DecodeImages(DecodeInfo &decode_info, RocJpegUtils rocjpeg_utils, RocJpegDe
     int width[batch_size], height[batch_size], color_comps[batch_size];
     std::vector<int> output_buffer_sizes(batch_size, 0);
     std::vector<unsigned char*> output_buffers(batch_size, nullptr); 
-
-    CHECK_HIP(hipSetDevice(device_id));
+    if(device_id >= 0)
+        CHECK_HIP(hipSetDevice(device_id));
     for (int i = 0; i < decode_info.file_paths.size(); i += batch_size) {
         int batch_end = std::min(i + batch_size, static_cast<int>(decode_info.file_paths.size()));
         for (int j = i; j < batch_end; j++) {
@@ -302,6 +302,7 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
     } else {
+        std::cerr << "Decode device is CPU\n";
         device_id = -1;
     }
 
