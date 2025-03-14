@@ -31,16 +31,17 @@ elseif(ROCM_PATH)
 else()
   set(ROCM_PATH /opt/rocm CACHE PATH "Default ROCm installation path")
 endif()
-
 # Set AMD Clang as default compiler
-if (NOT DEFINED CMAKE_CXX_COMPILER)
+if(NOT DEFINED CMAKE_CXX_COMPILER)
   set(CMAKE_C_COMPILER ${ROCM_PATH}/bin/amdclang)
   set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
 endif()
-
-set(VERSION "0.8.0")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED On)
+
+# rocJPEG Version
+# NOTE: package version and rocjpeg_version.h is generated with this version
+set(VERSION "0.11.0")
 
 # Set Project Version and Language
 project(rocjpeg VERSION ${VERSION} LANGUAGES CXX)
@@ -81,7 +82,7 @@ message("-- ${BoldBlue}rocJPEG Version -- ${VERSION}${ColourReset}")
 message("-- ${BoldBlue}rocJPEG Install Path -- ${CMAKE_INSTALL_PREFIX}${ColourReset}")
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH} ${ROCM_PATH}/hip)
+list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH}/lib/cmake)
 
 # rocJPEG Default Options
 option(BUILD_WITH_AMD_ADVANCE "Build rocJPEG for advanced AMD GPU Architecture" OFF)
@@ -105,7 +106,21 @@ endif()
 message("-- ${BoldBlue}rocJPEG Build Type -- ${CMAKE_BUILD_TYPE}${ColourReset}")
 
 # Set supported GPU Targets
-set(DEFAULT_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx950;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201")
+if(NOT GPU_TARGETS AND NOT AMDGPU_TARGETS)
+    find_package(ROCmCMakeBuildTools QUIET)
+    if(NOT ROCmCMakeBuildTools_FOUND)
+        find_package(ROCM QUIET)
+    endif()
+    include(ROCMCheckTargetIds OPTIONAL RESULT_VARIABLE HAS_ROCM_CHECK_TARGET_IDS)
+
+    set(OPTIONAL_GPU_TARGETS "gfx950;gfx1200;gfx1201")
+    if(HAS_ROCM_CHECK_TARGET_IDS)
+        rocm_check_target_ids(OPTIONAL_GPU_TARGETS_AVAILABLE TARGETS ${OPTIONAL_GPU_TARGETS})
+    else() # if we don't have rocm_check_target_ids, just assume the targets are available
+        set(OPTIONAL_GPU_TARGETS_AVAILABLE "${OPTIONAL_GPU_TARGETS}")
+    endif()
+    set(DEFAULT_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1031;gfx1032;gfx1100;gfx1101;gfx1102;${OPTIONAL_GPU_TARGETS_AVAILABLE}")
+endif()
 
 # Set AMD GPU_TARGETS
 if((AMDGPU_TARGETS OR DEFINED ENV{AMDGPU_TARGETS}) AND (NOT GPU_TARGETS))
@@ -177,25 +192,29 @@ if(HIP_FOUND AND Libva_FOUND)
       ROCJPEG_ROCP_REG_VERSION_PATCH=${VERSION_PATCH})
   endif()
 
+  #Generate BUILD_INFO
+  configure_file( ${CMAKE_CURRENT_SOURCE_DIR}/api/rocjpeg_version.h.in ${CMAKE_CURRENT_BINARY_DIR}/rocjpeg_version.h @ONLY )
+  install(TARGETS ${PROJECT_NAME} EXPORT rocjpeg-targets DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT dev)
+
   # install rocJPEG libs -- {ROCM_PATH}/lib
   install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT runtime NAMELINK_SKIP)
   install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT dev NAMELINK_ONLY)
   install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT asan)
   # install rocJPEG include files -- {ROCM_PATH}/include/rocJPEG
-  install(FILES api/rocjpeg.h api/rocjpeg_version.h
+  install(FILES api/rocjpeg/rocjpeg.h
+          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME} COMPONENT dev)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/rocjpeg_version.h
           DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME} COMPONENT dev)
   # install rocJPEG api trace include file -- {ROCM_PATH}/include/rocjpeg/amd_detail
   install(FILES api/amd_detail/rocjpeg_api_trace.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/amd_detail COMPONENT dev)
 
   # install rocJPEG samples -- {ROCM_PATH}/share/rocJPEG
-  install(DIRECTORY cmake DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME} COMPONENT dev)
-
   install(FILES samples/jpegDecode/CMakeLists.txt samples/jpegDecode/jpegdecode.cpp samples/jpegDecode/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/samples/jpegDecode COMPONENT dev)
   install(FILES samples/jpegDecodePerf/CMakeLists.txt samples/jpegDecodePerf/jpegdecodeperf.cpp samples/jpegDecodePerf/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/samples/jpegDecodePerf COMPONENT dev)
   install(FILES samples/jpegDecodeBatched/CMakeLists.txt samples/jpegDecodeBatched/jpegdecodebatched.cpp samples/jpegDecodeBatched/README.md DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/samples/jpegDecodeBatched COMPONENT dev)
   install(FILES samples/rocjpeg_samples_utils.h DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/samples COMPONENT dev)
-  install(DIRECTORY data/images DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/ COMPONENT dev)
+  install(DIRECTORY data/images DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME} COMPONENT dev)
   # install license information - {ROCM_PATH}/share/doc/rocJPEG
   set(CPACK_RESOURCE_FILE_LICENSE  "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
   install(FILES ${CPACK_RESOURCE_FILE_LICENSE} DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT runtime)
@@ -205,6 +224,49 @@ if(HIP_FOUND AND Libva_FOUND)
 
   message("-- ${White}AMD ROCm rocJPEG -- CMAKE_CXX_FLAGS:${CMAKE_CXX_FLAGS}${ColourReset}")
   message("-- ${White}AMD ROCm rocJPEG -- Link Libraries: ${LINK_LIBRARY_LIST}${ColourReset}")
+
+  ## Cmake module config file configurations
+  set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/" CACHE INTERNAL "Default module path.")
+
+  ## Export the package for use from the build-tree
+  ## (this registers the build-tree with a global CMake-registry)
+  export(PACKAGE ${PROJECT_NAME})
+  set(CONF_LIB_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+
+  ## Create the rocjpeg-config.cmake and rocjpeg-config-version files
+  include(CMakePackageConfigHelpers)
+  set(CONFIG_PACKAGE_INSTALL_DIR ${CONF_LIB_DIR}/cmake/${PROJECT_NAME})
+  set(LIB_INSTALL_DIR  "${CMAKE_INSTALL_LIBDIR}")
+  set(INCLUDE_INSTALL_DIR  "${CMAKE_INSTALL_INCLUDEDIR}")
+  set(BIN_INSTALL_DIR  "${CMAKE_INSTALL_BINDIR}")
+
+  ## Generate Config File for rocJPEG
+  configure_package_config_file(
+    ${CMAKE_MODULE_PATH}/${PROJECT_NAME}-config.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake
+    INSTALL_DESTINATION ${CONFIG_PACKAGE_INSTALL_DIR}
+    PATH_VARS LIB_INSTALL_DIR INCLUDE_INSTALL_DIR BIN_INSTALL_DIR
+  )
+
+  ## Generate config Version File for rocJPEG
+  write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake
+    VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+    COMPATIBILITY SameMajorVersion
+  )
+
+  ## Install the rocjpeg-config.cmake and rocjpeg-config-version.cmake
+  install(FILES
+    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config.cmake"
+    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
+    COMPONENT dev
+  )
+
+  ## Install the export set for use with the install-tree
+  install(EXPORT rocjpeg-targets DESTINATION
+    "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}" COMPONENT dev
+  )
 
   # make test with CTest
   enable_testing()
@@ -247,11 +309,11 @@ if(HIP_FOUND AND Libva_FOUND)
     set(rocJPEG_RPM_PACKAGE_LIST "${rocJPEG_RPM_PACKAGE_LIST}, rocprofiler-register")
   endif()
 
-  set(rocJPEG_DEBIAN_DEV_PACKAGE_LIST  "rocm-hip-runtime-dev, libva-amdgpu-dev, pkg-config")
+  set(rocJPEG_DEBIAN_DEV_PACKAGE_LIST  "rocm-hip-runtime-dev, libva-amdgpu-dev")
   if(UBUNTU_22_FOUND)
     set(rocJPEG_DEBIAN_DEV_PACKAGE_LIST "${rocJPEG_DEBIAN_DEV_PACKAGE_LIST}, libstdc++-12-dev")
   endif()
-  set(rocJPEG_RPM_DEV_PACKAGE_LIST  "rocm-hip-runtime-devel, libva-amdgpu-devel, pkg-config")
+  set(rocJPEG_RPM_DEV_PACKAGE_LIST  "rocm-hip-runtime-devel, libva-amdgpu-devel")
 
   # '%{?dist}' breaks manual builds on debian systems due to empty Provides
   execute_process(

@@ -3,6 +3,22 @@
 Documentation for rocJPEG is available at
 [https://rocm.docs.amd.com/projects/rocJPEG/en/latest/](https://rocm.docs.amd.com/projects/rocJPEG/en/latest/)
 
+## rocJPEG 0.11.0 for ROCm 6.5
+
+## Added
+* cmake config files
+* CTEST - New tests were introduced for JPEG batch decoding using various output formats, such as yuv_planar, y, rgb, and rgb_planar, both with and without region-of-interest (ROI).
+
+## Changed
+* Readme - cleanup and updates to pre-reqs
+* The `decode_params` argument of the `rocJpegDecodeBatched` API is now an array of `RocJpegDecodeParams` structs representing the decode parameters for the batch of JPEG images.
+
+## Removed
+* Dev Package - No longer installs pkg-config
+
+### Resolved issues
+* Fixed a bug that prevented copying the decoded image into the output buffer when the output buffer is larger than the input image.
+
 ## rocJPEG 0.8.0 for ROCm 6.4
 
 ### Changed

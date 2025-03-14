@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
     RocJpegImage output_image = {};
     std::vector<RocJpegImage> output_images;
     RocJpegDecodeParams decode_params = {};
+    std::vector<RocJpegDecodeParams> decode_params_batch;
     RocJpegUtils rocjpeg_utils;
     std::vector<std::string> base_file_names;
     std::vector<RocJpegStreamHandle> rocjpeg_stream_handles_for_current_batch;
@@ -81,8 +82,6 @@ int main(int argc, char **argv) {
     bool is_roi_valid = false;
     uint32_t roi_width;
     uint32_t roi_height;
-    roi_width = decode_params.crop_rectangle.right - decode_params.crop_rectangle.left;
-    roi_height = decode_params.crop_rectangle.bottom - decode_params.crop_rectangle.top;
     
     if (!RocJpegUtils::GetFilePaths(input_path, file_paths, is_dir, is_file)) {
         std::cerr << "ERROR: Failed to get input file paths!" << std::endl;
@@ -110,6 +109,7 @@ int main(int argc, char **argv) {
 
     batch_images.resize(batch_size);
     output_images.resize(batch_size);
+    decode_params_batch.resize(batch_size, decode_params);
     prior_channel_sizes.resize(batch_size, std::vector<uint32_t>(ROCJPEG_MAX_COMPONENT, 0));
     widths.resize(batch_size, std::vector<uint32_t>(ROCJPEG_MAX_COMPONENT, 0));
     heights.resize(batch_size, std::vector<uint32_t>(ROCJPEG_MAX_COMPONENT, 0));
@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params, temp_subsampling, temp_widths.data(), temp_heights.data(), num_channels, output_images[current_batch_size], channel_sizes)) {
+                if (rocjpeg_utils.GetChannelPitchAndSizes(decode_params_batch[index], temp_subsampling, temp_widths.data(), temp_heights.data(), num_channels, output_images[current_batch_size], channel_sizes)) {
                     std::cerr << "ERROR: Failed to get the channel pitch and sizes" << std::endl;
                     return EXIT_FAILURE;
                 }
@@ -235,7 +235,7 @@ int main(int argc, char **argv) {
         if (current_batch_size > 0) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (hw_decode) {
-                CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, rocjpeg_stream_handles_for_current_batch.data(), current_batch_size, &decode_params, output_images.data()));
+                CHECK_ROCJPEG(rocJpegDecodeBatched(rocjpeg_handle, rocjpeg_stream_handles_for_current_batch.data(), current_batch_size, decode_params_batch.data(), output_images.data()));
             } else {
                 num_channels = 3; // Temporarily assuming RGB images
                 int tjpf = TJPF_RGB;
@@ -277,6 +277,9 @@ int main(int argc, char **argv) {
                 for (int b = 0; b < current_batch_size; b++) {
                     std::string image_save_path = output_file_path;
                     //if ROI is present, need to pass roi_width and roi_height
+                    roi_width = decode_params_batch[b].crop_rectangle.right - decode_params_batch[b].crop_rectangle.left;
+                    roi_height = decode_params_batch[b].crop_rectangle.bottom - decode_params_batch[b].crop_rectangle.top;
+                    is_roi_valid = (roi_width > 0 && roi_height > 0 && roi_width <= widths[b][0] && roi_height <= heights[b][0]) ? true : false;
                     uint32_t width = is_roi_valid ? roi_width : widths[b][0];
                     uint32_t height = is_roi_valid ? roi_height : heights[b][0];
                     if (is_dir) {
