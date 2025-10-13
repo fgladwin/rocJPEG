@@ -19,41 +19,38 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
+#ifndef ROCJPEG_API_NEGATIVE_TESTS_H
+#define ROCJPEG_API_NEGATIVE_TESTS_H
 
-#ifndef _ROCJPEG_VERSION_H_
-#define _ROCJPEG_VERSION_H_
-
-/*!
- * \file
- * \brief rocJPEG version
- * \defgroup group_rocjpeg_version rocJPEG Version
- * \brief rocJPEG version
- */
-
-#ifdef __cplusplus
-extern "C" {
-#endif  /* __cplusplus */
-
-#define ROCJPEG_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
-#define ROCJPEG_VERSION_MINOR @PROJECT_VERSION_MINOR@
-#define ROCJPEG_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#include <iostream>
+#include <vector>
+#include <rocjpeg/rocjpeg.h>
 
 /**
- * ROCJPEG_CHECK_VERSION:
- * @major: major version, like 1 in 1.2.3
- * @minor: minor version, like 2 in 1.2.3
- * @patch: patch version, like 3 in 1.2.3
+ * @class RocJpegApiNegativeTests
+ * @brief A class to perform negative API tests for the rocJPEG library.
  *
- * Evaluates to %TRUE if the version of rocJPEG is greater than
- * @major, @minor and @patch
+ * This class contains a set of test cases designed to validate the behavior
+ * of the rocJPEG library when invalid or unexpected inputs are provided.
+ * It ensures the robustness and error handling capabilities of the library.
  */
-#define ROCJPEG_CHECK_VERSION(major, minor, patch) \
-        (ROCJPEG_VERSION_MAJOR > (major) || \
-        (ROCJPEG_VERSION_MAJOR == (major) && ROCJPEG_VERSION_MINOR > (minor)) || \
-        (ROCJPEG_VERSION_MAJOR == (major) && ROCJPEG_VERSION_MINOR == (minor) && ROCJPEG_VERSION_PATCH >= (patch)))
+class RocJpegApiNegativeTests {
+    public:
+        RocJpegApiNegativeTests();
+        ~RocJpegApiNegativeTests();
+        int RunTests();
+    private:
+        int TestInvalidStreamCreate();
+        int TestInvalidStreamParse();
+        int TestInvalidStreamDestroy();
+        int TestInvalidCreate();
+        int TestInvalidDestroy();
+        int TestInvalidGetImageInfo();
+        int TestInvalidDecode();
+        int TestInvalidDecodeBatched();
+        int TestInvalidGetErrorName();
+        RocJpegHandle rocjpeg_handle_;
+        RocJpegStreamHandle rocjpeg_stream_handle_;
+};
 
-#ifdef __cplusplus
-}  // end extern "C" block
-#endif
-
-#endif  //_ROCJPEG_VERSION_H_  header guard
+#endif // ROCJPEG_API_NEGATIVE_TESTS_H

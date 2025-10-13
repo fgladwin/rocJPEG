@@ -20,40 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef _ROCJPEG_VERSION_H_
-#define _ROCJPEG_VERSION_H_
+#include "rocjpeg_api_negative_tests.h"
 
-/*!
- * \file
- * \brief rocJPEG version
- * \defgroup group_rocjpeg_version rocJPEG Version
- * \brief rocJPEG version
- */
-
-#ifdef __cplusplus
-extern "C" {
-#endif  /* __cplusplus */
-
-#define ROCJPEG_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
-#define ROCJPEG_VERSION_MINOR @PROJECT_VERSION_MINOR@
-#define ROCJPEG_VERSION_PATCH @PROJECT_VERSION_PATCH@
-
-/**
- * ROCJPEG_CHECK_VERSION:
- * @major: major version, like 1 in 1.2.3
- * @minor: minor version, like 2 in 1.2.3
- * @patch: patch version, like 3 in 1.2.3
- *
- * Evaluates to %TRUE if the version of rocJPEG is greater than
- * @major, @minor and @patch
- */
-#define ROCJPEG_CHECK_VERSION(major, minor, patch) \
-        (ROCJPEG_VERSION_MAJOR > (major) || \
-        (ROCJPEG_VERSION_MAJOR == (major) && ROCJPEG_VERSION_MINOR > (minor)) || \
-        (ROCJPEG_VERSION_MAJOR == (major) && ROCJPEG_VERSION_MINOR == (minor) && ROCJPEG_VERSION_PATCH >= (patch)))
-
-#ifdef __cplusplus
-}  // end extern "C" block
-#endif
-
-#endif  //_ROCJPEG_VERSION_H_  header guard
+int main(int argc, char **argv) {
+    RocJpegApiNegativeTests rocjpeg_negative_test;
+    if (rocjpeg_negative_test.RunTests()) {
+        std::cout << "Test Failed!" << std::endl;
+        return EXIT_FAILURE;
+    }
+    std::cout << "Test Passed!" << std::endl;
+    return EXIT_SUCCESS;
+}

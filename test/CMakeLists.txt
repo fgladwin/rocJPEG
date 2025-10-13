@@ -40,12 +40,13 @@ else()
   set(ROCM_PATH /opt/rocm CACHE PATH "${White}${PROJECT_NAME}: Default ROCm installation path${ColourReset}")
 endif()
 # Set AMD Clang as default compiler
-if (NOT DEFINED CMAKE_CXX_COMPILER)
-  set(CMAKE_C_COMPILER ${ROCM_PATH}/bin/amdclang)
-  set(CMAKE_CXX_COMPILER ${ROCM_PATH}/bin/amdclang++)
-endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED On)
+set(CMAKE_CXX_EXTENSIONS ON)
+if(NOT DEFINED CMAKE_CXX_COMPILER)
+  set(CMAKE_C_COMPILER ${ROCM_PATH}/lib/llvm/bin/amdclang)
+  set(CMAKE_CXX_COMPILER ${ROCM_PATH}/lib/llvm/bin/amdclang++)
+endif()
 
 project(rocjpeg-test)
 
@@ -56,23 +57,26 @@ include(CTest)
 # add ROCm find Config location
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH}/lib/cmake)
 
-# find rocDecode
-find_package(ROCJPEG QUIET)
-
-if(ROCJPEG_FOUND)
-  message("-- ${White}${PROJECT_NAME}: rocJPEG found with find_package(ROCJPEG QUIET)${ColourReset}")
-  message("-- \t${White}ROCJPEG_INCLUDE_DIR -- ${ROCJPEG_INCLUDE_DIR}${ColourReset}")
-  message("-- \t${White}ROCJPEG_LIB_DIR -- ${ROCJPEG_LIB_DIR}${ColourReset}")
-  message("-- \t${White}ROCJPEG_LIBRARY -- ${ROCJPEG_LIBRARY}${ColourReset}")
-  message("-- \t${White}ROCJPEG_FOUND -- ${ROCJPEG_FOUND}${ColourReset}")
-  message("-- \t${White}ROCJPEG_VERSION -- ${ROCJPEG_VERSION}${ColourReset}")
-  message("-- \t${White}ROCJPEG_VERSION_MAJOR -- ${ROCJPEG_VERSION_MAJOR}${ColourReset}")
-  message("-- \t${White}ROCJPEG_VERSION_MINOR -- ${ROCJPEG_VERSION_MINOR}${ColourReset}")
-  message("-- \t${White}ROCJPEG_VERSION_PATCH -- ${ROCJPEG_VERSION_PATCH}${ColourReset}")
+# find rocjpeg
+if(BUILD_FROM_SOURCE)
+  message("-- ${White}${PROJECT_NAME}: CTests requires rocjpeg installed before running CTests")
 else()
-  message("-- ${Yellow}${PROJECT_NAME} requires rocJPEG. Install rocJPEG before running CTests")
-endif(ROCJPEG_FOUND)
+  find_package(rocjpeg QUIET)
 
+  if(rocjpeg_FOUND)
+    message("-- ${White}${PROJECT_NAME}: rocjpeg found with find_package(rocjpeg QUIET)${ColourReset}")
+    message("-- \t${White}rocjpeg_INCLUDE_DIR -- ${rocjpeg_INCLUDE_DIR}${ColourReset}")
+    message("-- \t${White}rocjpeg_LIB_DIR -- ${rocjpeg_LIB_DIR}${ColourReset}")
+    message("-- \t${White}rocjpeg_LIBRARY -- ${rocjpeg_LIBRARY}${ColourReset}")
+    message("-- \t${White}rocjpeg_FOUND -- ${rocjpeg_FOUND}${ColourReset}")
+    message("-- \t${White}rocjpeg_VERSION -- ${rocjpeg_VERSION}${ColourReset}")
+    message("-- \t${White}rocjpeg_VERSION_MAJOR -- ${rocjpeg_VERSION_MAJOR}${ColourReset}")
+    message("-- \t${White}rocjpeg_VERSION_MINOR -- ${rocjpeg_VERSION_MINOR}${ColourReset}")
+    message("-- \t${White}rocjpeg_VERSION_PATCH -- ${rocjpeg_VERSION_PATCH}${ColourReset}")
+  else()
+    message("-- ${Yellow}${PROJECT_NAME} requires rocjpeg. Install rocjpeg before running CTests")
+  endif(rocjpeg_FOUND)
+endif(BUILD_FROM_SOURCE)
 
 add_test(
   NAME
@@ -324,4 +328,15 @@ add_test(
             --build-generator "${CMAKE_GENERATOR}"
             --test-command "jpegdecodeperf"
             -i ${ROCM_PATH}/share/rocjpeg/images/
+)
+
+add_test(
+  NAME
+    jpeg-negative-api-tests
+  COMMAND
+    "${CMAKE_CTEST_COMMAND}"
+            --build-and-test "${ROCM_PATH}/share/rocjpeg/test/rocjpeg_negative_api_tests"
+                              "${CMAKE_CURRENT_BINARY_DIR}/rocjpeg_negative_api_tests"
+            --build-generator "${CMAKE_GENERATOR}"
+            --test-command "rocjpegnegativetest"
 )

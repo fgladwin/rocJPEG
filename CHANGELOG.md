@@ -3,7 +3,16 @@
 Documentation for rocJPEG is available at
 [https://rocm.docs.amd.com/projects/rocJPEG/en/latest/](https://rocm.docs.amd.com/projects/rocJPEG/en/latest/)
 
-## rocJPEG 0.11.0 for ROCm 6.5
+## rocjpeg 1.2.0 for ROCm 7.1.0
+
+## Changed
+* HIP meta package changed - Use hip-dev/devel to bring required hip dev deps
+
+### Resolved issues
+* Fixed an issue where extra padding was incorrectly included when saving decoded JPEG images to files.
+* Resolved a memory leak in the jpegDecode application.
+
+## rocjpeg 1.1.0 for ROCm 7.0.0
 
 ## Added
 * cmake config files
@@ -12,12 +21,15 @@ Documentation for rocJPEG is available at
 ## Changed
 * Readme - cleanup and updates to pre-reqs
 * The `decode_params` argument of the `rocJpegDecodeBatched` API is now an array of `RocJpegDecodeParams` structs representing the decode parameters for the batch of JPEG images.
+* `libdrm_amdgpu` is now explicitly linked with rocjpeg.
 
 ## Removed
 * Dev Package - No longer installs pkg-config
 
 ### Resolved issues
 * Fixed a bug that prevented copying the decoded image into the output buffer when the output buffer is larger than the input image.
+* Resolved an issue with resizing the internal memory pool by utilizing the explicit constructor of the vector's type during the resizing process.
+* Addressed and resolved CMake configuration warnings.
 
 ## rocJPEG 0.8.0 for ROCm 6.4
 

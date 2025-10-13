@@ -277,12 +277,11 @@ public:
     /**
      * @brief Initializes the decoder with the specified device, GCN architecture, and device ID.
      * @param device_name The name of the device.
-     * @param gcn_arch_name The name of the GCN architecture.
      * @param device_id The ID of the device.
      * @param gpu_uuid The UUID of the GPU.
      * @return The status of the initialization.
      */
-    RocJpegStatus InitializeDecoder(std::string device_name, std::string gcn_arch_name, int device_id, std::string& gpu_uuid);
+    RocJpegStatus InitializeDecoder(std::string device_name, int device_id, std::string& gpu_uuid);
 
     /**
      * @brief Submits a JPEG stream for decoding.
@@ -339,6 +338,8 @@ private:
     uint32_t min_picture_height_; // The minimum height of the picture
     uint32_t max_picture_width_; // The maximum width of the picture
     uint32_t max_picture_height_; // The maximum height of the picture
+    uint32_t default_surface_width_; // The default width of the surface
+    uint32_t default_surface_height_; // The default height of the surface
     bool supports_modifiers_; // DRM format modifiers support
     VADisplay va_display_; // The VAAPI display
     VAContextID va_context_id_; // The VAAPI context ID
